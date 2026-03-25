@@ -14,6 +14,12 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph, START
 
+import logging
+
+# Configure basic logging for debugging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 # --- Configuration ---
 JINA_API_KEY = os.environ.get("JINA_API_KEY", "jina_fc4562cfaf284cea94b01af1294d13c0LW8z0DPSfQJp8jkfVUeoAbVpIT40")
 LANCEDB_URI = os.environ.get("LANCEDB_URI", "./data/lancedb_store")
@@ -23,7 +29,7 @@ TABLE_NAME = "knowledge_base"
 os.makedirs(os.path.dirname(LANCEDB_URI), exist_ok=True)
 doc_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
 query_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
-llm = ChatVertexAI(model_name="gemini-2.5-pro", temperature=0)
+llm = ChatVertexAI(model_name="gemini-1.5-flash", temperature=0)
 
 # MongoDB Mock setup
 mongo_client = mongomock.MongoClient()
@@ -54,7 +60,7 @@ def chunk_text_jina(text: str) -> List[str]:
         chunks = res_json.get("chunks", [text])
         return [c.strip() for c in chunks if c.strip()]
     except Exception as e:
-        print(f"Jina segmentation failed: {e}")
+        logger.error(f"Jina segmentation failed: {e}")
         return [text]
 
 def jina_rerank(query: str, retrieved_docs: List[Document], top_n: int = 2) -> List[Document]:
@@ -82,7 +88,7 @@ def jina_rerank(query: str, retrieved_docs: List[Document], top_n: int = 2) -> L
             reranked_docs.append(retrieved_docs[original_index])
         return reranked_docs
     except Exception as e:
-        print(f"Jina Rerank failed: {e}")
+        logger.error(f"Jina Rerank failed: {e}")
         return retrieved_docs[:top_n] 
 
 # --- Async Ingestion Task ---
@@ -155,23 +161,31 @@ def retrieve_and_rerank_node(state: AgentState):
 
 def grade_documents_node(state: AgentState):
     state.get("logs", []).append("Grading context to prevent hallucination...")
-    filtered_docs = []
+    
+    if not state["documents"]:
+        return {"documents": [], "logs": state.get("logs", [])}
+        
+    # Combine documents to reduce LLM calls (Solve N+1 query latency issue)
     grade_prompt = ChatPromptTemplate.from_messages([
-        ("system", "判断给定的文档是否包含解答问题的关键信息。如果不相关，必须回答 'no'。"),
-        ("human", "问题: {question}\n\n文档: {document}")
+        ("system", "作为一个严谨的文档审核员，你需要判断以下【所有提供的内容段落】加在一起，是否包含了解答问题的关键事实依据？如果有哪怕一段相关，请回答 'yes'；如果全都是无关的废话，请坚决回答 'no'。"),
+        ("human", "问题: {question}\n\n合并的上下文段落:\n{documents}")
     ])
-    for doc in state["documents"]:
-        try:
-            result = grader_llm.invoke(grade_prompt.format_messages(question=state["question"], document=doc))
-            if result and result.binary_score.lower() == "yes":
-                filtered_docs.append(doc)
-        except:
-            filtered_docs.append(doc)
-            
-    if not filtered_docs:
-        state.get("logs", []).append("⚠️ All contexts rejected. Hallucination blocked.")
-    else:
-        state.get("logs", []).append(f"✅ {len(filtered_docs)} contexts approved.")
+    
+    combined_docs = "\n---\n".join(state["documents"])
+    
+    try:
+        result = grader_llm.invoke(grade_prompt.format_messages(question=state["question"], documents=combined_docs))
+        if result and result.binary_score.lower() == "yes":
+            # If relevant, pass all top 3 docs to generation
+            filtered_docs = state["documents"]
+            state.get("logs", []).append(f"✅ Contexts approved for generation.")
+        else:
+            filtered_docs = []
+            state.get("logs", []).append("⚠️ All contexts rejected. Hallucination blocked.")
+    except Exception as e:
+        logger.error(f"Grader failed: {e}")
+        # Failsafe: pass through
+        filtered_docs = state["documents"]
         
     return {"documents": filtered_docs, "logs": state.get("logs", [])}
 
