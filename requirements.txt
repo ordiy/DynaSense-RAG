@@ -1,0 +1,15 @@
+fastapi==0.110.0
+uvicorn==0.29.0
+python-multipart==0.0.9
+langchain
+langchain-google-vertexai
+langgraph
+lancedb==0.5.2
+pydantic
+pandas
+numpy
+jina
+requests
+mongomock
+polars
+datasets
