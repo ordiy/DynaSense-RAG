@@ -1,0 +1,64 @@
+{
+    "version": "1.2-chunking-jina-rerank",
+    "metrics": {
+        "total_queries": 6,
+        "correct_hits": 3,
+        "recall_at_2": 0.5
+    },
+    "details": [
+        {
+            "query": "咱们公司未来打算搞什么技术架构？",
+            "expected_parent_id": 2,
+            "retrieved_parent_ids": [
+                5,
+                10
+            ],
+            "hit": false
+        },
+        {
+            "query": "公司23年三季度的营收情况",
+            "expected_parent_id": 1,
+            "retrieved_parent_ids": [
+                1,
+                6
+            ],
+            "hit": true
+        },
+        {
+            "query": "降维向量的相关的技术分析",
+            "expected_parent_id": 5,
+            "retrieved_parent_ids": [
+                4,
+                4
+            ],
+            "hit": false
+        },
+        {
+            "query": "星期五有什么安排？",
+            "expected_parent_id": 4,
+            "retrieved_parent_ids": [
+                4,
+                10
+            ],
+            "hit": true
+        },
+        {
+            "query": "前端新版本加载慢怎么回事？",
+            "expected_parent_id": 6,
+            "retrieved_parent_ids": [
+                4,
+                8
+            ],
+            "hit": false
+        },
+        {
+            "query": "入职培训什么时间？",
+            "expected_parent_id": 10,
+            "retrieved_parent_ids": [
+                10,
+                4
+            ],
+            "hit": true
+        }
+    ]
+}

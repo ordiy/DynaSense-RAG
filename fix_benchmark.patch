@@ -1,0 +1,10 @@
+--- run_benchmark.py
++++ run_benchmark.py
+@@ -141,6 +141,7 @@
+     
+     # 2. Rerank
+     reranked_docs = jina_rerank(query, base_docs, top_n=10)
++    time.sleep(1.5) # Avoid Jina free tier API 429 Too Many Requests
+     
+     results["vector_rerank"]["recall@1"] += calc_recall(reranked_docs, expected_id, 1)
+     results["vector_rerank"]["recall@3"] += calc_recall(reranked_docs, expected_id, 3)

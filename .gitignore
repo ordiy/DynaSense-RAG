@@ -1,0 +1,25 @@
+# Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Data / DB
+*.json
+!recall_metrics_report.json
+!recall_metrics_v2.json
+!recall_metrics_v3.json
+lancedb_*

@@ -1,0 +1,12 @@
+--- run_benchmark.py
++++ run_benchmark.py
+@@ -124,7 +124,8 @@
+ print(f"\nRunning benchmark on {len(test_queries)} queries...")
+ 
+ def calc_recall(retrieved_docs, expected_id, k):
+-    retrieved_ids = [d.metadata["doc_id"] for d in retrieved_docs[:k]]
++    # LanceDB inserts metadata correctly, doc_id should be in there
++    retrieved_ids = [d.metadata.get("doc_id") for d in retrieved_docs[:k]]
+     return 1 if expected_id in retrieved_ids else 0
+ 
+ results = {
