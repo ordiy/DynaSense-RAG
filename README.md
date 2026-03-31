@@ -13,57 +13,91 @@ Instead, this architecture achieves high precision through:
 1. **Intelligent Chunking** (Jina Segmenter)
 2. **High-Dimensional Vector Retrieval** (Google Vertex AI `text-embedding-004` + LanceDB)
 3. **Cross-Encoder Semantic Reranking** (Jina Multilingual Reranker)
-4. **Strict Grader Node** (LangGraph state machine for hallucination prevention)
+4. **Dual-Track Grader + Generator** (LangGraph state machine — strict for factual queries, analytically capable for reasoning queries)
+5. **Server-Side Multi-Turn Memory** (conversation session with context-length control)
 
 
 
 ## 🏗️ Architecture Design (MAP-RAG)
 
 ```text
-[ Data Ingestion Pipeline ]
+╔══════════════════════════════════════════════════════════════════════╗
+║                     DATA INGESTION PIPELINE                         ║
+╚══════════════════════════════════════════════════════════════════════╝
 
 Raw Documents (TXT/MD)
       │
       ▼
-[ Jina Semantic Segmenter ] ──(Chunking)──> Raw Text Chunks
+[ Jina Semantic Segmenter ] ──(Chunking)──> Child Text Chunks
                                               │
-                    ┌─────────────────────────┴─────────────────────────┐
-                    ▼                                                   ▼
-            [ Document DB ]                                 [ Vertex Embeddings ]
-            (e.g., MongoDB)                                    (text-embedding)
-            Stores: full text                                           │
-            key: doc_id                                                 ▼
-                                                              [ Vector DB (LanceDB) ]
-                                                              Stores: dense vector
-                                                              Metadata: doc_id
+                    ┌─────────────────────────┴──────────────────────────┐
+                    ▼                                                    ▼
+         [ Document DB (MongoMock) ]                    [ Vertex AI Embeddings ]
+           Stores: full parent text                       text-embedding-004
+           key: parent_id  ◄──── parent_id ────────────────────┤
+                                                               ▼
+                                                    [ Vector DB (LanceDB) ]
+                                                      Stores: dense vectors
+                                                      Metadata: parent_id
 
-═══════════════════════════════════════════════════════════════════════════════════
+╔══════════════════════════════════════════════════════════════════════╗
+║               RETRIEVAL & GENERATION PIPELINE                       ║
+╚══════════════════════════════════════════════════════════════════════╝
 
-[ Retrieval & Generation Pipeline ]
-
- User Query
+  User Query ──────────────────────────────────┐
+      │                                         │ (multi-turn)
+      │                              [ Session Memory ]
+      │                              conversation_id
+      │                              history → context budget
+      │                              _build_query_with_history()
+      │                                         │
+      ▼                                         ▼
+[ LanceDB Vector Search ]  ←──── enriched query (with history)
+   Top K=10 child chunks
       │
       ▼
-[ LanceDB Vector Search ] ──(Top K=10)──> Initial Candidate docs (doc_ids)
+[ Small-to-Big Expansion ]
+   child_id → parent_id → full parent text
       │
       ▼
-[ Jina Cross-Encoder Reranker ] ──(Top K=3)──> High-Precision docs
+[ Jina Cross-Encoder Reranker ]
+   Top K=3 high-precision parent docs
       │
       ▼
-[ Fetch Full Text ] <──(By doc_id from Document DB)
+[ Query Type Detector ]   ← NEW: _is_analysis_query()
       │
-      ▼
-[ LangGraph Grader Node ] ──(Anti-Hallucination check)
+      ├─────── Factual Query ──────────────────────────────────┐
+      │        (lookup, definition, specific facts)            │
+      │                                                        ▼
+      │                                           [ GRADE_PROMPT (strict) ]
+      │                                           "Does context contain
+      │                                            a direct answer?"
+      │                                                        │
+      │                                            NO ──► [ Block / Fallback ]
+      │                                            YES ──► [ GEN_PROMPT ]
+      │                                                    "Strictly use context."
       │
-      ├─────(If STRICT 'NO')─────> [ Reject / Fallback Message ]
-      │
-      └─────(If STRICT 'YES')────> [ Gemini Generator Node ] 
-                                           │
-                                           ▼
-                                 Final Synthesized Answer
+      └─────── Analysis Query ────────────────────────────────┐
+               (分析/影响/如何/为什么/规划/评估…)             │
+               (analyze/impact/why/how/plan/risk…)            ▼
+                                                 [ GRADE_ANALYSIS_PROMPT (relaxed) ]
+                                                 "Does context contain ANY
+                                                  topic-related background fact?"
+                                                              │
+                                                  NO ──► [ Block / Fallback ]
+                                                  YES ──► [ GEN_ANALYSIS_PROMPT ]
+                                                          "Ground facts + domain
+                                                           reasoning. Label:
+                                                           【文档事实】【分析推理】"
+                                                              │
+                                                              ▼
+                                                   Final Synthesized Answer
 ```
 
-The system uses a strict directed graph (State Machine) to process user queries. By explicitly dropping the *Query Rewrite* node from the main critical path, we eliminate Intent Drift and drastically reduce API latency.
+The system uses a directed LangGraph state machine. Key design decisions:
+- **No Query Rewrite on critical path** — prevents Intent Drift, reduces latency
+- **Dual-Track Routing** — analysis queries are not blocked by a strict factual grader; the LLM is explicitly instructed to label reasoning vs. retrieved facts
+- **Fail-Closed by Default** — if the grader returns an error, the pipeline blocks the answer rather than passing through unverified context
 
 
 
@@ -79,6 +113,37 @@ We benchmarked this pipeline against a subset of the HuggingFace `sciq` dataset 
 
 *Conclusion*: The Reranker effectively acts as a precision "sniper," ensuring that the LLM only needs to process 1-3 chunks of text to get the correct context 100% of the time. This saves massive token costs, drastically reduces latency, and closes the window for hallucination.
 
+## ✨ Feature Highlights
+
+### Dual-Track Query Routing (Analysis vs. Factual)
+The pipeline automatically detects whether a query requires a **factual lookup** or **analytical reasoning**, and routes it to the appropriate grader and generator policy:
+
+| | Factual Track | Analysis Track |
+|---|---|---|
+| **Trigger** | Default | Keywords: 分析/影响/如何/规划/evaluate/impact… |
+| **Grader** | Strict: requires direct answer in context | Relaxed: requires any topic-related fact |
+| **Generator** | `GEN_PROMPT`: "strictly use context" | `GEN_ANALYSIS_PROMPT`: facts + domain reasoning |
+| **Output Format** | Direct answer | `【文档事实】` + `【分析推理】` labelled sections |
+
+**Demo — Analysis query on partial context:**
+> **User**: 介绍"豌豆苗期货"，分析天气对该期货交易的影响
+>
+> **Context retrieved**: growth cycle 3 months, region: east coast farms, yield 10 tons/day
+>
+> **Response** *(abridged)*:
+> **【文档事实】** 豌豆苗期货作物生长周期3个月，日产量10吨。
+> **【分析推理】** 基于行业经验：① 极端天气（霜冻/高温）可直接导致减产，推高期货价格；② 高温高湿促进病虫害，降低可交割品质；③ 恶劣天气阻断运输，增加物流成本并传导至期货端。
+
+See [docs/dual-track-query-routing.md](./docs/dual-track-query-routing.md) for full design, implementation details, and 4 demo cases.
+
+### Server-Side Multi-Turn Memory
+Conversation sessions managed by `conversation_id` on the backend, with context-length control and TTL cleanup. See [docs/chat_test_memory_design.md](./docs/chat_test_memory_design.md).
+
+### A/B Memory Strategy Comparison
+`POST /api/chat/session/ab` runs both `prioritized` and `legacy` memory modes in parallel for the same message, returning side-by-side query content, answers, and blocking status—enabling rapid diagnosis of memory strategy effects.
+
+---
+
 ## 🛠️ Tech Stack
 * **Orchestration**: `LangGraph` & `LangChain`
 * **Embedding Model**: Google Vertex AI `text-embedding-004`
@@ -86,6 +151,7 @@ We benchmarked this pipeline against a subset of the HuggingFace `sciq` dataset 
 * **Vector Database**: `LanceDB`
 * **Semantic Chunking**: `Jina Segmenter API`
 * **Reranker**: `jina-reranker-v2-base-multilingual`
+* **Session Store**: In-memory `dict` with TTL (upgradeable to Redis)
 
 ## 🚀 Getting Started
 ```bash
@@ -99,13 +165,24 @@ pip install langchain langchain-google-vertexai langgraph lancedb==0.5.2 pydanti
 # 3. Set your API Keys and GCP config
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-sa.json"
+export JINA_API_KEY="your-jina-api-key"
 
-# 4. Run scripts
-python run_mvp_v3.py        # Run the MVP pipeline with Jina Chunking and Rerank
-python run_benchmark.py     # Run the recall benchmark on the SciQ dataset
+# 4. Start the web server
+.venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
+
+# Open http://localhost:8000 in your browser
+# Tab 1: Upload documents
+# Tab 2: Single-turn chat
+# Tab 3: Evaluation
+# Tab 4: Multi-turn Chat Test (with Memory + A/B Compare)
 ```
 
 ## 📄 Documentation
-- [doc-feauture-v1.md](./doc-feauture-v1.md) - Initial Architecture RFC.
-- [doc-future.md](./doc-future.md) - Enterprise principles and guidelines preventing bad answers.
-- [benchmark_report.md](./benchmark_report.md) - Full benchmark logs.
+
+| Document | Description |
+|---|---|
+| [docs/dual-track-query-routing.md](./docs/dual-track-query-routing.md) | **Dual-Track Query Routing** — analysis vs. factual, grader/generator policies, demo Q&A |
+| [docs/chat_test_memory_design.md](./docs/chat_test_memory_design.md) | Server-side multi-turn memory, `conversation_id` session design |
+| [docs/doc-small-to-big-retrieval.md](./docs/doc-small-to-big-retrieval.md) | Parent-child chunk expansion (Small-to-Big retrieval) |
+| [docs/doc-feauture-v1.md](./docs/doc-feauture-v1.md) | Initial Architecture RFC |
+| [docs/doc-future.md](./docs/doc-future.md) | Enterprise principles for preventing bad answers |

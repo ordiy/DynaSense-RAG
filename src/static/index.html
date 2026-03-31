@@ -48,6 +48,10 @@
         .list-group-item { background: rgba(0,0,0,0.2); color: #ccc; border: 1px solid rgba(255,255,255,0.1); }
         .list-group-item-success { background: rgba(56, 239, 125, 0.1); color: #38ef7d; border-color: rgba(56, 239, 125, 0.3); }
         .text-muted { color: #8c8c9e !important; }
+        .chat-box {
+            height: 420px;
+            overflow-y: auto;
+        }
 
     </style>
 
@@ -67,6 +71,9 @@
         </li>
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="eval-tab" data-bs-toggle="tab" data-bs-target="#eval" type="button" role="tab">3. Evaluation (NDCG/Recall)</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="chatTest-tab" data-bs-toggle="tab" data-bs-target="#chatTest" type="button" role="tab">4. Chat Test (Memory)</button>
         </li>
     </ul>
 
@@ -136,6 +143,38 @@
                         <h6>Top 3 Retrieved Contexts:</h6>
                         <ul id="topDocsList" class="list-group"></ul>
                     </div>
+                </div>
+            </div>
+        </div>
+        <!-- 4. Chat Test Tab -->
+        <div class="tab-pane fade" id="chatTest" role="tabpanel">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Multi-turn Chat Test (2 Columns)</h5>
+                    <p class="text-muted">Left: conversation history. Right: request/response details. Memory and context-length trimming are handled by backend session APIs.</p>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">Message</label>
+                                <div class="input-group mb-3">
+                                    <input type="text" class="form-control" id="chatTestQuery" placeholder="e.g. Ask about the strategic plan">
+                                    <button class="btn btn-success" type="button" id="chatTestSendBtn" onclick="sendChatTest()">Send</button>
+                                    <button class="btn btn-primary" type="button" id="chatTestAbBtn" onclick="runChatTestAB()">A/B Compare</button>
+                                </div>
+                            </div>
+
+                            <h6>Conversation</h6>
+                            <div class="log-box chat-box mb-3" id="chatTestConversation"></div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <h6>Last Interaction Details</h6>
+                            <div class="log-box chat-box mb-3" id="chatTestDetails"></div>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-warning" type="button" onclick="resetChatTest()">Reset Session</button>
                 </div>
             </div>
         </div>
@@ -255,6 +294,202 @@
 
         } catch (err) {
             alert('Eval failed: ' + err);
+        }
+    }
+
+    // --- Chat Test Logic (server-side conversation_id + history) ---
+    const safeRenderer = new marked.Renderer();
+    // Prevent LLM-generated HTML from executing in the browser.
+    safeRenderer.html = function() { return ''; };
+
+    function escapeHtml(str) {
+        return String(str)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    let chatTestMessages = []; // mirrors server-side history for rendering
+    let chatTestConversationId = null;
+
+    async function resetChatTest() {
+        try {
+            if (chatTestConversationId) {
+                await fetch(`/api/chat/session/${encodeURIComponent(chatTestConversationId)}`, { method: 'DELETE' });
+            }
+        } catch (_) {}
+        chatTestConversationId = null;
+        chatTestMessages = [];
+        document.getElementById('chatTestConversation').innerHTML = '';
+        document.getElementById('chatTestDetails').innerHTML = '';
+        document.getElementById('chatTestQuery').value = '';
+    }
+
+    function renderChatTestConversation() {
+        const box = document.getElementById('chatTestConversation');
+        const parts = [];
+        for (const m of chatTestMessages) {
+            const roleLabel = m.role === 'user' ? 'User' : 'Assistant';
+            const content = m.role === 'assistant'
+                ? marked.parse(m.content || '', { renderer: safeRenderer })
+                : escapeHtml(m.content || '');
+            parts.push(`<div style="margin-bottom:14px;">
+                <div style="margin-bottom:4px;"><b>${roleLabel}:</b></div>
+                <div style="white-space: pre-wrap;">${content}</div>
+                <div style="border-bottom:1px solid rgba(255,255,255,0.08); margin-top:10px;"></div>
+            </div>`);
+        }
+        box.innerHTML = parts.join('');
+    }
+
+    function renderChatTestDetails(responseData) {
+        const box = document.getElementById('chatTestDetails');
+        const requestQuery = responseData.request_query || '';
+
+        const reqInfo = `
+            <div style="margin-bottom:10px;">
+                <b>Request query</b> (len=${(requestQuery || '').length})
+                <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(requestQuery || '')}</pre>
+            </div>
+        `;
+
+        const logs = (responseData.logs || []).map(x => escapeHtml(x)).join('\n');
+        const logsHtml = `
+            <div style="margin-bottom:10px;">
+                <b>Graph logs</b>
+                <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${logs}</pre>
+            </div>
+        `;
+
+        const answerHtml = `
+            <div style="margin-bottom:10px;">
+                <b>Answer</b>
+                <div class="mt-2" style="white-space: pre-wrap;">${marked.parse(responseData.answer || '', { renderer: safeRenderer })}</div>
+            </div>
+        `;
+
+        const contexts = responseData.context_used || [];
+        const ctxParts = contexts.slice(0, 6).map((c, idx) => {
+            return `<div style="margin-bottom:10px;">
+                <div><b>Context ${idx + 1}</b></div>
+                <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(c || '')}</pre>
+            </div>`;
+        }).join('');
+
+        const ctxHtml = `
+            <div style="margin-bottom:10px;">
+                <b>Top contexts (first ${Math.min(6, contexts.length)})</b>
+                ${ctxParts || '<div class="text-muted">No context used.</div>'}
+            </div>
+        `;
+
+        box.innerHTML = reqInfo + answerHtml + logsHtml + ctxHtml;
+    }
+
+    function renderABCompareDetails(data) {
+        const box = document.getElementById('chatTestDetails');
+        const r = data.results || {};
+        const p = r.prioritized || {};
+        const l = r.legacy || {};
+
+        function blockHtml(name, item) {
+            const badge = item.blocked
+                ? '<span class="badge bg-danger">Blocked</span>'
+                : '<span class="badge bg-success">Answered</span>';
+            const q = item.request_query || '';
+            const a = item.answer || '';
+            return `
+                <div class="mb-3" style="border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:10px;">
+                    <div><b>${name}</b> ${badge}</div>
+                    <div class="text-muted">query_len=${q.length}</div>
+                    <div style="margin-top:6px;"><b>Request Query</b></div>
+                    <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(q)}</pre>
+                    <div><b>Answer (preview)</b></div>
+                    <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(a.slice(0, 300))}</pre>
+                </div>
+            `;
+        }
+
+        box.innerHTML = `
+            <div class="mb-3"><b>A/B Recommended:</b> <span class="badge bg-info text-dark">${escapeHtml(data.recommended_mode || 'prioritized')}</span></div>
+            ${blockHtml('prioritized', p)}
+            ${blockHtml('legacy', l)}
+        `;
+    }
+
+    async function runChatTestAB() {
+        const btn = document.getElementById('chatTestAbBtn');
+        btn.disabled = true;
+        try {
+            const input = document.getElementById('chatTestQuery');
+            const userMsg = (input.value || '').trim();
+            if (!userMsg) return;
+            document.getElementById('chatTestDetails').innerHTML = '<div class="text-muted">Running A/B compare...</div>';
+
+            const response = await fetch('/api/chat/session/ab', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_id: chatTestConversationId,
+                    message: userMsg
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const msg = data && data.detail ? data.detail : ('HTTP ' + response.status);
+                document.getElementById('chatTestDetails').innerHTML =
+                    `<div class="alert alert-warning">A/B compare failed: ${escapeHtml(msg)}</div>`;
+                return;
+            }
+            // Keep the same conversation id for user's next normal send.
+            chatTestConversationId = data.conversation_id || chatTestConversationId;
+            renderABCompareDetails(data);
+        } catch (err) {
+            document.getElementById('chatTestDetails').innerHTML =
+                `<div class="alert alert-warning">A/B compare error: ${escapeHtml(err && err.message ? err.message : err)}</div>`;
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function sendChatTest() {
+        const btn = document.getElementById('chatTestSendBtn');
+        btn.disabled = true;
+        try {
+            const input = document.getElementById('chatTestQuery');
+            const userMsg = (input.value || '').trim();
+            if (!userMsg) return;
+            input.value = '';
+            document.getElementById('chatTestDetails').innerHTML = '<div class="text-muted">Sending request...</div>';
+
+            const response = await fetch('/api/chat/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_id: chatTestConversationId,
+                    message: userMsg
+                })
+            });
+
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const msg = data && data.detail ? data.detail : ('HTTP ' + response.status);
+                document.getElementById('chatTestDetails').innerHTML =
+                    `<div class="alert alert-warning">Chat failed: ${escapeHtml(msg)}</div>`;
+                return;
+            }
+
+            chatTestConversationId = data.conversation_id || chatTestConversationId;
+            chatTestMessages = Array.isArray(data.history) ? data.history : chatTestMessages;
+            renderChatTestConversation();
+            renderChatTestDetails(data);
+        } catch (err) {
+            document.getElementById('chatTestDetails').innerHTML =
+                `<div class="alert alert-warning">Error: ${escapeHtml(err && err.message ? err.message : err)}</div>`;
+        } finally {
+            btn.disabled = false;
         }
     }
 </script>
