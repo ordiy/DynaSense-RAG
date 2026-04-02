@@ -2,7 +2,10 @@
 
 > **MAP-RAG**: Multi-resolution Agentic Perception Retrieval-Augmented Generation
 
-An enterprise-grade RAG (Retrieval-Augmented Generation) architecture prototype focused on strict Anti-Hallucination mechanisms, intelligent semantic chunking, and Cross-Encoder reranking. 
+An enterprise-grade RAG (Retrieval-Augmented Generation) architecture prototype focused on strict Anti-Hallucination mechanisms, intelligent semantic chunking, and Cross-Encoder reranking.
+
+## 🌐 Translations
+[日本語-🇯🇵](README-jp.md) [Deutsch-🇩🇪](README-de.md) ｜ [简体汉字](README-cn.md) ｜ [繁體汉字](README-ch.md)
 
 ## 🎯 Core Philosophy
 **"No Answer is better than a Bad/Toxic Answer."**
