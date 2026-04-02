@@ -203,8 +203,20 @@ GRADE_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 GEN_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", "严格使用以下检索到的上下文来回答问题。绝不允许编造。\n上下文: {context}"),
-    ("human", "问题: {question}")
+    (
+        "system",
+        "Using the information contained in the context, give a comprehensive answer to the question. "
+        "Respond only to the question asked; the response should be concise and relevant to the question. "
+        "Provide the number of the source document when relevant. "
+        "If the answer cannot be deduced from the context, do not give an answer.",
+    ),
+    (
+        "human",
+        "Context:\n{context}\n"
+        "---\n"
+        "Now here is the question you need to answer.\n\n"
+        "Question: {question}",
+    ),
 ])
 
 # 分析推理型问题使用宽松生成 Prompt：允许在文档事实基础上做专业推理
@@ -351,7 +363,7 @@ def grade_documents_node(state: AgentState):
 
 def generate_node(state: AgentState):
     if not state["documents"]:
-        return {"generation": "抱歉，知识库中未能找到与您问题高度相关的信息，为避免产生误导（幻觉），系统已阵断回答。"}
+        return {"generation": "抱歉，知识库中未能找到与您问题高度相关的信息，为避免产生误导（幻觉），系统已阻断回答。"}
 
     logs = state.setdefault("logs", [])
     question = state.get("question", "")
@@ -369,6 +381,8 @@ def generate_node(state: AgentState):
         question=question
     )).content
     return {"generation": generation, "logs": logs}
+
+
 workflow = StateGraph(AgentState)
 workflow.add_node("retrieve", retrieve_and_rerank_node)
 workflow.add_node("grade", grade_documents_node)
