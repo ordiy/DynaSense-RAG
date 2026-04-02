@@ -1,0 +1,2 @@
+# Minimal deps for CI unit tests (no Vertex / LanceDB / LangChain).
+pytest>=8.0

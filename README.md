@@ -18,6 +18,7 @@ Instead, this architecture achieves high precision through:
 3. **Cross-Encoder Semantic Reranking** (Jina Multilingual Reranker)
 4. **Dual-Track Grader + Generator** (LangGraph state machine — strict for factual queries, analytically capable for reasoning queries)
 5. **Server-Side Multi-Turn Memory** (conversation session with context-length control)
+6. **Hybrid RAG (MVP)** — **Query Router** + **Dense + BM25** + **Neo4j graph recall** + unified **Top‑K rerank** before grading (see `docs/mvp_hybrid_rag.md`)
 
 
 
@@ -116,6 +117,23 @@ We benchmarked this pipeline against a subset of the HuggingFace `sciq` dataset 
 
 *Conclusion*: The Reranker effectively acts as a precision "sniper," ensuring that the LLM only needs to process 1-3 chunks of text to get the correct context 100% of the time. This saves massive token costs, drastically reduces latency, and closes the window for hallucination.
 
+### Recall@K / NDCG@K (batch script, SciQ)
+Automated run via `scripts/benchmark_recall_ndcg.py` — same retrieval stack as evaluation (`run_evaluation`), **vector path only** (`use_hybrid=false`). Latest report: [`reports/recall_ndcg_benchmark_latest.md`](reports/recall_ndcg_benchmark_latest.md).
+
+| Setting | Value |
+|--------|--------|
+| Corpus | HuggingFace `allenai/sciq` (train), unique `support` paragraphs as parents |
+| Indexed documents | 60 |
+| Evaluation queries | 30 |
+| Retrieval mode | Dense → Small-to-Big → Jina rerank (hybrid routing off) |
+
+| Metric (mean) | Value |
+|---------------|-------|
+| Recall@1,3,5,10 | 1.000 |
+| NDCG@1,3,5,10 | 1.000 |
+
+Raw JSON and timestamped reports live under `reports/recall_ndcg_benchmark_*.json` / `*.md`. See [`docs/recall_evaluation.md`](docs/recall_evaluation.md).
+
 ## ✨ Feature Highlights
 
 ### Dual-Track Query Routing (Analysis vs. Factual)
@@ -145,6 +163,52 @@ Conversation sessions managed by `conversation_id` on the backend, with context-
 ### A/B Memory Strategy Comparison
 `POST /api/chat/session/ab` runs both `prioritized` and `legacy` memory modes in parallel for the same message, returning side-by-side query content, answers, and blocking status—enabling rapid diagnosis of memory strategy effects.
 
+### Hybrid RAG — Routing + Dual Recall + Neo4j (MVP)
+Implements **`readme-v2-1.md`**: an LLM **intent router** (`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`), **dual indexing** (LanceDB + Neo4j triples with `chunk_id` provenance), **online** dense + BM25 recall with **graph linearization**, and a **single Jina rerank** cut to Top‑5 before the existing grader/generator.
+
+```text
+User Query
+    │
+    ▼
+[ Query Router (LLM) ] ──► VECTOR | GRAPH | GLOBAL | HYBRID
+    │
+    ├─ VECTOR ──► Dense(Small-to-Big) + BM25(child→parent) ──┐
+    ├─ GRAPH ───► Neo4j subgraph → linearized triples text ──┤──► [ Jina Rerank Top‑5 ]
+    ├─ GLOBAL ──► Graph summary + small dense anchor ──────────┤
+    └─ HYBRID ──► merge VECTOR + GRAPH candidates ───────────┘
+                                        │
+                                        ▼
+                           Grader (anti-hallucination) → Generator
+```
+
+```mermaid
+flowchart TB
+  subgraph ingest["Offline: dual-engine indexing"]
+    D[Raw documents] --> J[Jina chunking]
+    J --> E[Vertex embeddings + LanceDB]
+    J --> T[LLM triple extraction]
+    T --> N[(Neo4j + chunk_id provenance)]
+  end
+  subgraph online["Online: router + unified rerank"]
+    Q[User query] --> R[Query router]
+    R --> V[VECTOR: dense + BM25]
+    R --> G[GRAPH: Neo4j + linearize]
+    R --> GL[GLOBAL: graph summary + dense anchor]
+    R --> HY[HYBRID: merge candidates]
+    V --> RR[Jina cross-encoder rerank Top-K]
+    G --> RR
+    GL --> RR
+    HY --> RR
+    RR --> P[Grader + generator]
+  end
+```
+
+- **Local Neo4j**: `docker compose -f docker-compose.neo4j.yml up -d` (Bolt `7687`, default password `changeme`).
+- **Demo corpus**: upload `data/demo_related_party.txt`, then try *「中国中信银行的关联方有哪些？」* — expect `GRAPH` or `HYBRID` with graph-backed context in logs.
+- **Disable hybrid** (legacy vector-only LangGraph): `export HYBRID_RAG_ENABLED=false`.
+
+Full design, env vars, and Q&A: [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md).
+
 ---
 
 ## 🛠️ Tech Stack
@@ -154,6 +218,8 @@ Conversation sessions managed by `conversation_id` on the backend, with context-
 * **Vector Database**: `LanceDB`
 * **Semantic Chunking**: `Jina Segmenter API`
 * **Reranker**: `jina-reranker-v2-base-multilingual`
+* **Graph DB (Hybrid MVP)**: Neo4j Community (local Docker) + `neo4j` Python driver
+* **Lexical retrieval**: `rank-bm25` (BM25Okapi over child chunks)
 * **Session Store**: In-memory `dict` with TTL (upgradeable to Redis)
 
 ## 🚀 Getting Started
@@ -170,7 +236,11 @@ export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-sa.json"
 export JINA_API_KEY="your-jina-api-key"
 
-# 4. Start the web server
+# 4. (Optional) Local Neo4j for Hybrid RAG
+docker compose -f docker-compose.neo4j.yml up -d
+export NEO4J_PASSWORD="changeme"   # must match compose file
+
+# 5. Start the web server
 .venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
 
 # Open http://localhost:8000 in your browser
@@ -184,8 +254,12 @@ export JINA_API_KEY="your-jina-api-key"
 
 | Document | Description |
 |---|---|
+| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — router, dense+BM25, Neo4j, fusion rerank (`readme-v2-1.md`) |
+| [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — test cases, batch API, `scripts/run_recall_eval.py` |
+| [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ benchmark plan** — `scripts/benchmark_recall_ndcg.py`, reports `reports/recall_ndcg_benchmark_*.md` |
 | [docs/dual-track-query-routing.md](./docs/dual-track-query-routing.md) | **Dual-Track Query Routing** — analysis vs. factual, grader/generator policies, demo Q&A |
 | [docs/chat_test_memory_design.md](./docs/chat_test_memory_design.md) | Server-side multi-turn memory, `conversation_id` session design |
 | [docs/doc-small-to-big-retrieval.md](./docs/doc-small-to-big-retrieval.md) | Parent-child chunk expansion (Small-to-Big retrieval) |
 | [docs/doc-feauture-v1.md](./docs/doc-feauture-v1.md) | Initial Architecture RFC |
 | [docs/doc-future.md](./docs/doc-future.md) | Enterprise principles for preventing bad answers |
+| [readme-v2-1.md](./readme-v2-1.md) | Dual-track Hybrid RAG product spec + **Q&A test data** (related-party demo link & sample questions) |

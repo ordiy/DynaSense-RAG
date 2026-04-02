@@ -4,6 +4,9 @@
 
 面向企业场景的 RAG（检索增强生成）架构原型，强调严格的反幻觉机制、智能语义分块与 Cross-Encoder 重排序。
 
+## 🌐 其它语言
+[English 🇺🇸](README.md) · [日本語 🇯🇵](README-jp.md) · [Deutsch 🇩🇪](README-de.md) · [繁體中文](README-ch.md)
+
 ## 🎯 核心理念
 **「没有回答，好过错误／有害的回答。」**
 
@@ -15,6 +18,7 @@
 3. **Cross-Encoder 语义重排序**（Jina Multilingual Reranker）
 4. **双轨 Grader + Generator**（LangGraph 状态机 — 事实型查询严格、推理型查询可分析）
 5. **服务端多轮记忆**（带上下文长度控制的会话）
+6. **Hybrid RAG（MVP）** — **Query Router** + **Dense + BM25** + **Neo4j 图谱召回** + 进入打分前的统一 **Top‑K 重排**（见 `docs/mvp_hybrid_rag.md`）
 
 
 
@@ -113,6 +117,23 @@
 
 *结论*：重排序器起到高精度「狙击」作用，使 LLM 往往只需处理 1–3 个文本块即可获得正确上下文（本评测中达 100%）。可显著节省 token、降低延迟并缩小幻觉窗口。
 
+### Recall@K / NDCG@K（批量脚本，SciQ）
+由 `scripts/benchmark_recall_ndcg.py` 自动跑批，与评测栈一致（`run_evaluation`），**仅向量路径**（`use_hybrid=false`）。最新报告：[`reports/recall_ndcg_benchmark_latest.md`](reports/recall_ndcg_benchmark_latest.md)。
+
+| 设置 | 数值 |
+|--------|--------|
+| 语料 | HuggingFace `allenai/sciq`（train），每条唯一 `support` 段落作为父文档 |
+| 入库文档数 | 60 |
+| 评测问题数 | 30 |
+| 检索模式 | Dense → Small-to-Big → Jina 重排（关闭 hybrid 路由） |
+
+| 指标（均值） | 数值 |
+|---------------|-------|
+| Recall@1,3,5,10 | 1.000 |
+| NDCG@1,3,5,10 | 1.000 |
+
+原始 JSON 与时间戳报告见 `reports/recall_ndcg_benchmark_*.{json,md}`。详见 [`docs/recall_evaluation.md`](docs/recall_evaluation.md)。
+
 ## ✨ 功能亮点
 
 ### 双轨查询路由（分析 vs 事实）
@@ -142,6 +163,52 @@
 ### A/B 记忆策略对比
 `POST /api/chat/session/ab` 对同一条消息并行运行 `prioritized` 与 `legacy` 两种记忆模式，并排返回查询内容、回答与拦截状态，便于快速诊断记忆策略效果。
 
+### Hybrid RAG — 路由 + 双路召回 + Neo4j（MVP）
+实现 **`readme-v2-1.md`**：LLM **意图路由**（`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`）、**双引擎索引**（LanceDB + 带 `chunk_id` 溯源的 Neo4j 三元组）、在线 **Dense + BM25** 与 **图谱线性化** 召回，并在既有 grader/generator 前做 **单次 Jina 重排** 截断为 Top‑5。
+
+```text
+用户 Query
+    │
+    ▼
+[ Query Router (LLM) ] ──► VECTOR | GRAPH | GLOBAL | HYBRID
+    │
+    ├─ VECTOR ──► Dense(Small-to-Big) + BM25(子→父) ──┐
+    ├─ GRAPH ───► Neo4j 子图 → 线性化三元组文本 ─────┤──► [ Jina Rerank Top‑5 ]
+    ├─ GLOBAL ──► 图谱摘要 + 小体量稠密锚点 ─────────┤
+    └─ HYBRID ──► 合并 VECTOR + GRAPH 候选 ─────────┘
+                                        │
+                                        ▼
+                           Grader（反幻觉）→ Generator
+```
+
+```mermaid
+flowchart TB
+  subgraph ingest["离线：双引擎索引"]
+    D[原始文档] --> J[Jina 分块]
+    J --> E[Vertex 向量 + LanceDB]
+    J --> T[LLM 三元组抽取]
+    T --> N[(Neo4j + chunk_id 溯源)]
+  end
+  subgraph online["在线：路由 + 统一重排"]
+    Q[用户问题] --> R[Query Router]
+    R --> V[VECTOR: dense + BM25]
+    R --> G[GRAPH: Neo4j + 线性化]
+    R --> GL[GLOBAL: 图谱摘要 + 稠密锚点]
+    R --> HY[HYBRID: 合并候选]
+    V --> RR[Jina Cross-Encoder Top-K]
+    G --> RR
+    GL --> RR
+    HY --> RR
+    RR --> P[Grader + Generator]
+  end
+```
+
+- **本地 Neo4j**：`docker compose -f docker-compose.neo4j.yml up -d`（Bolt `7687`，默认密码 `changeme`）。
+- **演示语料**：上传 `data/demo_related_party.txt`，可问 *「中国中信银行的关联方有哪些？」* — 日志中常见 `GRAPH` 或 `HYBRID` 且带图谱上下文。
+- **关闭 Hybrid**（回退纯向量 LangGraph）：`export HYBRID_RAG_ENABLED=false`。
+
+完整说明见 [`docs/mvp_hybrid_rag.md`](docs/mvp_hybrid_rag.md)。
+
 ---
 
 ## 🛠️ 技术栈
@@ -151,6 +218,8 @@
 * **向量数据库**：`LanceDB`
 * **语义分块**：`Jina Segmenter API`
 * **重排序**：`jina-reranker-v2-base-multilingual`
+* **图数据库（Hybrid MVP）**：Neo4j Community（本地 Docker）+ `neo4j` Python 驱动
+* **词法检索**：`rank-bm25`（子块 BM25Okapi）
 * **会话存储**：带 TTL 的内存 `dict`（可升级为 Redis）
 
 ## 🚀 快速开始
@@ -167,7 +236,11 @@ export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-sa.json"
 export JINA_API_KEY="your-jina-api-key"
 
-# 4. 启动 Web 服务
+# 4.（可选）本地 Neo4j，用于 Hybrid RAG
+docker compose -f docker-compose.neo4j.yml up -d
+export NEO4J_PASSWORD="changeme"   # 须与 compose 中一致
+
+# 5. 启动 Web 服务
 .venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
 
 # 浏览器打开 http://localhost:8000
@@ -181,8 +254,12 @@ export JINA_API_KEY="your-jina-api-key"
 
 | 文档 | 说明 |
 |---|---|
+| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — 路由、Dense+BM25、Neo4j、融合重排（`readme-v2-1.md`） |
+| [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — 用例、批量 API、`scripts/run_recall_eval.py` |
+| [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ 基准方案** — `scripts/benchmark_recall_ndcg.py`，报告 `reports/recall_ndcg_benchmark_*.md` |
 | [docs/dual-track-query-routing.md](./docs/dual-track-query-routing.md) | **双轨查询路由** — 分析与事实、grader/生成策略、演示问答 |
 | [docs/chat_test_memory_design.md](./docs/chat_test_memory_design.md) | 服务端多轮记忆、`conversation_id` 会话设计 |
 | [docs/doc-small-to-big-retrieval.md](./docs/doc-small-to-big-retrieval.md) | 父子块扩展（Small-to-Big 检索） |
 | [docs/doc-feauture-v1.md](./docs/doc-feauture-v1.md) | 初始架构 RFC |
 | [docs/doc-future.md](./docs/doc-future.md) | 企业侧防止劣质回答的原则 |
+| [readme-v2-1.md](./readme-v2-1.md) | 双轨 Hybrid RAG 产品说明与 **Q&A 测试数据**（含关联交易演示链接与示例问法） |

@@ -1,0 +1,20 @@
+# Gitleaks configuration: reduce false positives for documentation placeholders.
+# Docs: https://github.com/gitleaks/gitleaks
+
+title = "DynaSense-RAG gitleaks config"
+
+[extend]
+# Use default ruleset; override only where needed.
+useDefault = true
+
+[allowlist]
+description = "Allowlisted paths and patterns"
+paths = [
+  '''\.env\.example$''',
+  '''reports/.*''',
+]
+regexes = [
+  '''your-jina-api-key''',
+  '''your-project-id''',
+  '''/path/to/your''',
+]

@@ -11,7 +11,9 @@ import numpy as np
 from langchain_core.documents import Document
 
 # --- Config ---
-JINA_API_KEY = "jina_fc4562cfaf284cea94b01af1294d13c0LW8z0DPSfQJp8jkfVUeoAbVpIT40"
+JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
+if not JINA_API_KEY:
+    raise SystemExit("Set JINA_API_KEY (do not commit secrets to git).")
 VECTOR_DB_PATH = "/tmp/lancedb_benchmark"
 TABLE_NAME = "benchmark_docs"
 

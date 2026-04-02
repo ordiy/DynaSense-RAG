@@ -1,12 +1,11 @@
 import os
 import json
-import math
 import time
 import uuid
 import requests
 import lancedb
 import mongomock
-from typing import List, Dict, TypedDict, Tuple
+from typing import List, Dict, TypedDict, Tuple, Any
 from pydantic import BaseModel, Field
 
 from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
@@ -180,6 +179,19 @@ def process_document_task(content: str, filename: str, task_state: dict):
             tbl = db_lance.create_table(TABLE_NAME, data=data)
             vectorstore = LanceDB(connection=db_lance, table_name=TABLE_NAME, embedding=doc_embeddings)
 
+    # Neo4j: LLM triple extraction + merge (MVP; optional if DB down / benchmark skip)
+    if os.environ.get("SKIP_NEO4J_INGEST", "").lower() in ("1", "true", "yes"):
+        pass
+    else:
+        try:
+            from src.hybrid_rag import ingest_chunks_to_neo4j
+
+            chunk_ids = [f"chunk_{parent_id}_{i}" for i in range(len(chunks))]
+            n_triples = ingest_chunks_to_neo4j(chunks, chunk_ids, safe_filename)
+            task_state["graph_triples_ingested"] = n_triples
+        except Exception as e:
+            logger.warning("Neo4j graph ingest skipped: %s", e)
+
     task_state["status"] = "completed"
     task_state["progress"] = 100
     task_state["result"] = f"Processed {len(chunks)} chunks."
@@ -270,18 +282,21 @@ def _is_analysis_followup(question: str) -> bool:
         or "current user question" in q
     )
     return _is_analysis_query(q) and has_memory_signal
-def retrieve_and_rerank_node(state: AgentState):
-    logs = state.setdefault("logs", [])
-    logs.append("Executing Vector Search (Top 10 child chunks)")
-    if not vectorstore:
-        return {"documents": [], "logs": logs}
-        
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
-    retrieved_chunks = retriever.invoke(state["question"])
-    
-    logs.append("Context Expansion: Mapping chunks to Parent Documents (Small-to-Big)")
 
-    # 先收集本轮候选的 parent_ids，并批量拉取父文档，避免 k 次 find_one
+
+def retrieve_parent_documents_expanded(question: str, dense_k: int = 10) -> tuple[List[Document], List[str]]:
+    """
+    Vector retrieval over child chunks, expand to parent documents (Small-to-Big).
+    Returns (expanded parent Documents, log lines). Used by vector-only path and Hybrid RAG.
+    """
+    logs: List[str] = []
+    if not vectorstore:
+        return [], ["Vector store not initialized."]
+    logs.append(f"Dense retrieval: Top {dense_k} child chunks")
+    retriever = vectorstore.as_retriever(search_kwargs={"k": dense_k})
+    retrieved_chunks = retriever.invoke(question)
+    logs.append("Context expansion: mapping chunks to parent documents")
+
     seen_parent_ids = set()
     parent_ids: List[str] = []
     for chunk in retrieved_chunks:
@@ -300,7 +315,7 @@ def retrieve_and_rerank_node(state: AgentState):
                     parent_meta_by_id[pid] = rec
             batch_ok = True
         except Exception as e:
-            logger.error(f"Batch parent fetch failed, falling back to find_one: {e}")
+            logger.error(f"Batch parent fetch failed: {e}")
 
     expanded_docs: List[Document] = []
     expanded_seen = set()
@@ -312,14 +327,25 @@ def retrieve_and_rerank_node(state: AgentState):
         parent_record = parent_meta_by_id.get(pid) if batch_ok else collection.find_one({"id": pid, "type": "parent"})
         if parent_record:
             full_text = f"[Source: {parent_record.get('source', 'Unknown')}]\n{parent_record.get('full_content', '')}"
-            expanded_docs.append(Document(page_content=full_text, metadata={"parent_id": pid}))
-                
+            expanded_docs.append(Document(page_content=full_text, metadata={"parent_id": pid, "source": "dense"}))
+
     if not expanded_docs:
-        expanded_docs = retrieved_chunks  # Fallback if no parent found
+        expanded_docs = retrieved_chunks
+    return expanded_docs, logs
+
+
+def retrieve_and_rerank_node(state: AgentState):
+    logs = state.setdefault("logs", [])
+    logs.append("Executing Vector Search (Top 10 child chunks)")
+    if not vectorstore:
+        return {"documents": [], "logs": logs}
+
+    expanded_docs, sublogs = retrieve_parent_documents_expanded(state["question"], dense_k=10)
+    logs.extend(sublogs)
 
     logs.append(f"Executing Jina Cross-Encoder Rerank (Top 3) on {len(expanded_docs)} Parent Documents")
     reranked_docs = jina_rerank(state["question"], expanded_docs, top_n=3)
-    
+
     return {"documents": [doc.page_content for doc in reranked_docs], "logs": logs}
 
 def grade_documents_node(state: AgentState):
@@ -394,86 +420,103 @@ workflow.add_edge("generate", END)
 rag_app = workflow.compile()
 
 def run_chat_pipeline(query: str):
+    """
+    Default: Hybrid RAG (router + dense/BM25 + Neo4j + fusion rerank) when HYBRID_RAG_ENABLED=true.
+    Fallback: original LangGraph vector-only pipeline on failure or HYBRID_RAG_ENABLED=false.
+    """
+    if os.environ.get("HYBRID_RAG_ENABLED", "true").lower() in ("1", "true", "yes"):
+        try:
+            from src.hybrid_rag import run_hybrid_chat_pipeline
+
+            return run_hybrid_chat_pipeline(query)
+        except Exception:
+            logger.exception("Hybrid pipeline failed; falling back to vector-only LangGraph.")
     inputs = {"question": query, "loop_count": 0, "logs": []}
     result = rag_app.invoke(inputs)
     return {
         "answer": result["generation"],
         "context_used": result["documents"],
-        "logs": result["logs"]
+        "logs": result["logs"],
     }
+
+def reset_knowledge_base() -> None:
+    """
+    Clear MongoMock child/parent records and drop the LanceDB table; reset vectorstore handle.
+    Intended for benchmarks / isolated tests. Set LANCEDB_URI before importing rag_core for a fresh path.
+    """
+    global vectorstore
+    vectorstore = None
+    try:
+        collection.delete_many({})
+    except Exception as e:
+        logger.warning("reset_knowledge_base: mongo clear failed: %s", e)
+    try:
+        if TABLE_NAME in db_lance.table_names():
+            db_lance.drop_table(TABLE_NAME)
+    except Exception as e:
+        logger.warning("reset_knowledge_base: lance drop failed: %s", e)
+
 
 # --- Evaluation Logic ---
-def calculate_ndcg(hit_rank: int, k: int) -> float:
-    """Calculate NDCG@K. hit_rank is 0-indexed."""
-    if hit_rank == -1 or hit_rank >= k:
-        return 0.0
-    return 1.0 / math.log2(hit_rank + 2) # rank+1 for 1-based, +1 for formula = rank+2
+def retrieve_vector_ranked_documents(query: str, top_n: int = 10) -> List[Document]:
+    """Vector-only path: dense Small-to-Big + Jina rerank (for Recall / NDCG)."""
+    if not vectorstore:
+        return []
+    expanded_docs, _ = retrieve_parent_documents_expanded(query, dense_k=10)
+    if not expanded_docs:
+        return []
+    return jina_rerank(query, expanded_docs, top_n=top_n)
 
-def run_evaluation(query: str, expected_substring: str):
+
+def run_evaluation(query: str, expected_substring: str, use_hybrid: bool = False):
+    """
+    Binary relevance: first ranked document containing `expected_substring` wins.
+    Reports Recall@1,3,5,10 and NDCG@K for K in 1,3,5,10 (primary: ndcg@10). See `src/recall_metrics.py`.
+    """
+    from src.recall_metrics import find_hit_rank, metrics_for_hit
+
     if not vectorstore:
         return {"error": "Database is empty."}
-        
-    # 1. Vector Search
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
-    retrieved_chunks = retriever.invoke(query)
-    
-    # 2. Small-to-Big Context Expansion
-    expanded_docs = []
-    seen_parent_ids = set()
-    parent_ids: List[str] = []
-    for chunk in retrieved_chunks:
-        pid = chunk.metadata.get("parent_id")
-        if pid and pid not in seen_parent_ids:
-            seen_parent_ids.add(pid)
-            parent_ids.append(pid)
 
-    parent_meta_by_id: Dict[str, dict] = {}
-    batch_ok = False
-    if parent_ids:
-        try:
-            for rec in collection.find({"type": "parent", "id": {"$in": parent_ids}}):
-                pid = rec.get("id")
-                if pid:
-                    parent_meta_by_id[pid] = rec
-            batch_ok = True
-        except Exception as e:
-            logger.error(f"Batch parent fetch failed in evaluation, falling back: {e}")
+    if use_hybrid:
+        from src.hybrid_rag import retrieve_hybrid_ranked_documents
 
-    expanded_seen = set()
-    for chunk in retrieved_chunks:
-        pid = chunk.metadata.get("parent_id")
-        if not pid or pid in expanded_seen:
-            continue
-        expanded_seen.add(pid)
-        parent_record = parent_meta_by_id.get(pid) if batch_ok else collection.find_one({"id": pid, "type": "parent"})
-        if parent_record:
-            full_text = f"[Source: {parent_record.get('source', 'Unknown')}]\n{parent_record.get('full_content', '')}"
-            expanded_docs.append(Document(page_content=full_text, metadata={"parent_id": pid}))
-                
-    if not expanded_docs:
-        expanded_docs = retrieved_chunks
-    
-    # 3. Rerank Expanded Docs
-    reranked_docs = jina_rerank(query, expanded_docs, top_n=10)
-    
-    # Find rank based on whether the full parent text contains the expected string
-    hit_rank = -1
-    lower_expected = expected_substring.lower()
-    for i, doc in enumerate(reranked_docs):
-        if lower_expected in doc.page_content.lower():
-            hit_rank = i
-            break
-            
-    results = {}
-    for k in [1, 3, 5, 10]:
-        recall = 1 if (hit_rank != -1 and hit_rank < k) else 0
-        ndcg = calculate_ndcg(hit_rank, k)
-        results[f"K={k}"] = {"Recall": recall, "NDCG": round(ndcg, 3)}
-        
-    return {
+        ranked_docs, meta = retrieve_hybrid_ranked_documents(query, top_n=10)
+        if meta.get("error"):
+            return {"error": meta["error"], **{k: v for k, v in meta.items() if k != "logs"}}
+        ranked_texts = [d.page_content for d in ranked_docs]
+        eval_logs = list(meta.get("logs", []))
+        route_info = {
+            "route": meta.get("route"),
+            "effective_route": meta.get("effective_route"),
+            "router_reason": meta.get("router_reason"),
+        }
+    else:
+        ranked_docs = retrieve_vector_ranked_documents(query, top_n=10)
+        ranked_texts = [d.page_content for d in ranked_docs]
+        eval_logs = ["Vector-only eval: dense + small-to-big + Jina rerank top 10."]
+        route_info = {}
+
+    hit_rank = find_hit_rank(ranked_texts, expected_substring)
+    per = metrics_for_hit(hit_rank)
+
+    legacy: Dict[str, Dict[str, float | int]] = {}
+    for k in (1, 3, 5, 10):
+        legacy[f"K={k}"] = {
+            "Recall": per[f"recall@{k}"],
+            "NDCG": per[f"ndcg@{k}"],
+        }
+
+    out: Dict[str, Any] = {
         "query": query,
         "expected_substring": expected_substring,
+        "use_hybrid": use_hybrid,
         "hit_rank": hit_rank + 1 if hit_rank != -1 else "Not Found",
-        "metrics": results,
-        "top_3_docs": [d.page_content for d in reranked_docs[:3]]
+        "hit_rank_0": hit_rank,
+        "metrics": per,
+        "metrics_legacy": legacy,
+        "top_3_docs": [d.page_content for d in ranked_docs[:3]],
+        "eval_logs": eval_logs,
     }
+    out.update(route_info)
+    return out

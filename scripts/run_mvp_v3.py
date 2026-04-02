@@ -12,7 +12,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph, START
 
 # --- Config ---
-JINA_API_KEY = "jina_fc4562cfaf284cea94b01af1294d13c0LW8z0DPSfQJp8jkfVUeoAbVpIT40"
+JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
+if not JINA_API_KEY:
+    raise SystemExit("Set JINA_API_KEY (do not commit secrets to git).")
 
 print("Initializing models...")
 doc_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")

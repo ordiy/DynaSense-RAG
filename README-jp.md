@@ -4,6 +4,9 @@
 
 厳格なハルシネーション対策、インテリジェントな意味チャンク分割、クロスエンコーダによる再ランキングに重点を置いた、エンタープライズ向け RAG（検索拡張生成）アーキテクチャのプロトタイプです。
 
+## 🌐 他言語
+[English 🇺🇸](README.md) · [简体中文](README-cn.md) · [繁體中文](README-ch.md) · [Deutsch 🇩🇪](README-de.md)
+
 ## 🎯 コア哲学
 **「悪い／有害な回答より、答えない方がまし。」**
 
@@ -15,6 +18,7 @@
 3. **クロスエンコーダによる意味再ランキング**（Jina Multilingual Reranker）
 4. **二系統の Grader + Generator**（LangGraph ステートマシン — 事実クエリは厳格、推論クエリは分析可能）
 5. **サーバー側マルチターン記憶**（文脈長制御付き会話セッション）
+6. **Hybrid RAG（MVP）** — **Query Router** + **Dense + BM25** + **Neo4j グラフ検索** + 採点前の統一 **Top‑K 再ランク**（`docs/mvp_hybrid_rag.md` 参照）
 
 
 
@@ -113,6 +117,23 @@ HuggingFace の `sciq` データセットのサブセット（1000 文書、100 
 
 *結論*: 再ランカーは事実上、精度の「スナイパー」として機能し、LLM が正しい文脈を得るのに 1〜3 チャンクで十分となるケースが 100% になります。トークンコストの大幅削減、レイテンシの劇的な低減、ハルシネーションの余地の縮小につながります。
 
+### Recall@K / NDCG@K（バッチスクリプト、SciQ）
+`scripts/benchmark_recall_ndcg.py` による自動実行。評価と同じ検索スタック（`run_evaluation`）、**ベクトル経路のみ**（`use_hybrid=false`）。最新レポート: [`reports/recall_ndcg_benchmark_latest.md`](reports/recall_ndcg_benchmark_latest.md)。
+
+| 設定 | 値 |
+|--------|--------|
+| コーパス | HuggingFace `allenai/sciq`（train）、一意の `support` 段落を親ドキュメントとして索引 |
+| 索引ドキュメント数 | 60 |
+| 評価クエリ数 | 30 |
+| 検索モード | Dense → Small-to-Big → Jina 再ランク（hybrid ルーティング off） |
+
+| 指標（平均） | 値 |
+|---------------|-------|
+| Recall@1,3,5,10 | 1.000 |
+| NDCG@1,3,5,10 | 1.000 |
+
+生 JSON とタイムスタンプ付きレポートは `reports/recall_ndcg_benchmark_*.{json,md}`。詳細は [`docs/recall_evaluation.md`](docs/recall_evaluation.md)。
+
 ## ✨ 機能ハイライト
 
 ### 二系統クエリルーティング（分析 vs 事実）
@@ -142,6 +163,52 @@ HuggingFace の `sciq` データセットのサブセット（1000 文書、100 
 ### A/B メモリ戦略の比較
 `POST /api/chat/session/ab` は同一メッセージに対して `prioritized` と `legacy` の両メモリモードを並列実行し、クエリ本文・回答・ブロック状態を並べて返します。メモリ戦略の効果を迅速に診断できます。
 
+### Hybrid RAG — ルーティング + デュアルリコール + Neo4j（MVP）
+**`readme-v2-1.md`** に基づく実装: LLM **意図ルータ**（`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`）、**デュアル索引**（LanceDB + `chunk_id` 由来情報付き Neo4j トリプル）、オンライン **Dense + BM25** と **グラフ線形化**、既存 grader/generator の前に **単一 Jina 再ランク** で Top‑5 に截断。
+
+```text
+ユーザー Query
+    │
+    ▼
+[ Query Router (LLM) ] ──► VECTOR | GRAPH | GLOBAL | HYBRID
+    │
+    ├─ VECTOR ──► Dense(Small-to-Big) + BM25(子→親) ──┐
+    ├─ GRAPH ───► Neo4j 部分グラフ → 線形化トリプル ──┤──► [ Jina Rerank Top‑5 ]
+    ├─ GLOBAL ──► グラフ要約 + 小さな dense アンカー ─┤
+    └─ HYBRID ──► VECTOR + GRAPH 候補のマージ ────────┘
+                                        │
+                                        ▼
+                           Grader（反ハルシネーション）→ Generator
+```
+
+```mermaid
+flowchart TB
+  subgraph ingest["オフライン：デュアルエンジン索引"]
+    D[生ドキュメント] --> J[Jina チャンク]
+    J --> E[Vertex 埋め込み + LanceDB]
+    J --> T[LLM トリプル抽出]
+    T --> N[(Neo4j + chunk_id)]
+  end
+  subgraph online["オンライン：ルータ + 統一再ランク"]
+    Q[ユーザークエリ] --> R[Query Router]
+    R --> V[VECTOR: dense + BM25]
+    R --> G[GRAPH: Neo4j + 線形化]
+    R --> GL[GLOBAL: グラフ要約 + dense アンカー]
+    R --> HY[HYBRID: 候補マージ]
+    V --> RR[Jina Cross-Encoder Top-K]
+    G --> RR
+    GL --> RR
+    HY --> RR
+    RR --> P[Grader + Generator]
+  end
+```
+
+- **ローカル Neo4j**: `docker compose -f docker-compose.neo4j.yml up -d`（Bolt `7687`、既定パスワード `changeme`）。
+- **デモコーパス**: `data/demo_related_party.txt` をアップロードし *「中国中信银行的关联方有哪些？」* など — ログで `GRAPH` または `HYBRID` とグラフ文脈が典型。
+- **Hybrid 無効化**（ベクトルのみ LangGraph に戻す）: `export HYBRID_RAG_ENABLED=false`。
+
+詳細は [`docs/mvp_hybrid_rag.md`](docs/mvp_hybrid_rag.md)。
+
 ---
 
 ## 🛠️ 技術スタック
@@ -151,6 +218,8 @@ HuggingFace の `sciq` データセットのサブセット（1000 文書、100 
 * **ベクトル DB**: `LanceDB`
 * **意味チャンク分割**: `Jina Segmenter API`
 * **再ランカー**: `jina-reranker-v2-base-multilingual`
+* **グラフ DB（Hybrid MVP）**: Neo4j Community（ローカル Docker）+ Python ドライバ `neo4j`
+* **語彙検索**: `rank-bm25`（子チャンク上の BM25Okapi）
 * **セッションストア**: TTL 付きインメモリ `dict`（Redis への拡張可能）
 
 ## 🚀 はじめに
@@ -167,7 +236,11 @@ export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-sa.json"
 export JINA_API_KEY="your-jina-api-key"
 
-# 4. Web サーバーの起動
+# 4.（任意）ローカル Neo4j（Hybrid RAG 用）
+docker compose -f docker-compose.neo4j.yml up -d
+export NEO4J_PASSWORD="changeme"   # compose と一致させる
+
+# 5. Web サーバーの起動
 .venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
 
 # ブラウザで http://localhost:8000 を開く
@@ -181,8 +254,12 @@ export JINA_API_KEY="your-jina-api-key"
 
 | ドキュメント | 説明 |
 |---|---|
+| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — ルータ、Dense+BM25、Neo4j、融合再ランク（`readme-v2-1.md`） |
+| [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — ケース、バッチ API、`scripts/run_recall_eval.py` |
+| [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ ベンチマーク計画** — `scripts/benchmark_recall_ndcg.py`、レポート `reports/recall_ndcg_benchmark_*.md` |
 | [docs/dual-track-query-routing.md](./docs/dual-track-query-routing.md) | **二系統クエリルーティング** — 分析 vs 事実、Grader/Generator 方針、デモ Q&A |
 | [docs/chat_test_memory_design.md](./docs/chat_test_memory_design.md) | サーバー側マルチターン記憶、`conversation_id` セッション設計 |
 | [docs/doc-small-to-big-retrieval.md](./docs/doc-small-to-big-retrieval.md) | 親子チャンク展開（Small-to-Big 検索） |
 | [docs/doc-feauture-v1.md](./docs/doc-feauture-v1.md) | 初期アーキテクチャ RFC |
 | [docs/doc-future.md](./docs/doc-future.md) | 悪い回答を防ぐためのエンタープライズ原則 |
+| [readme-v2-1.md](./readme-v2-1.md) | デュアルトラック Hybrid RAG の仕様と **Q&A テストデータ**（関連当事者デモリンク・例示質問） |

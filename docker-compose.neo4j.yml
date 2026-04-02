@@ -1,0 +1,25 @@
+# Neo4j for Hybrid RAG (local MVP). Start with:
+#   docker compose -f docker-compose.neo4j.yml up -d
+#
+# Bolt: bolt://localhost:7687
+# Browser: http://localhost:7474
+# Default user/pass: neo4j / changeme (override via NEO4J_AUTH in env)
+
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: dynasense-neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/changeme
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1G
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+
+volumes:
+  neo4j_data:
+  neo4j_logs:

@@ -13,3 +13,5 @@ requests
 mongomock
 polars
 datasets
+neo4j>=5.14.0
+rank-bm25>=0.2.2
