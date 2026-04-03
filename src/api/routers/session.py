@@ -102,6 +102,7 @@ async def chat_session_ab(request: ChatSessionABRequest):
                 "answer": answer,
                 "logs": out.get("logs", []),
                 "context_used": out.get("context_used", []),
+                "citations": out.get("citations", []),
                 "blocked": blocked,
             }
         except Exception:
@@ -111,6 +112,7 @@ async def chat_session_ab(request: ChatSessionABRequest):
                 "answer": "Internal server error.",
                 "logs": [],
                 "context_used": [],
+                "citations": [],
                 "blocked": True,
             }
 
