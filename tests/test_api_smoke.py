@@ -30,4 +30,5 @@ def test_openapi_and_pages_exist():
     assert "/api/chat/stream" in paths
     assert "/api/upload" in paths
     assert "/api/feedback" in paths
+    assert "/api/whatif/loan/compare" in paths
     assert "/api/debug/lancedb/summary" in paths

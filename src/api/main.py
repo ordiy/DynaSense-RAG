@@ -23,6 +23,7 @@ from src.api.routers import (  # noqa: E402
     ingest,
     pages,
     session,
+    whatif,
 )
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
     application.include_router(session.router)
     application.include_router(eval.router)
     application.include_router(feedback.router)
+    application.include_router(whatif.router)
     return application
 
 

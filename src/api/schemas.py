@@ -63,3 +63,28 @@ class FeedbackRequest(BaseModel):
     rating: Literal[-1, 0, 1]
     comment: str | None = Field(default=None, max_length=2000)
     tags: list[str] = Field(default_factory=list, max_length=10)
+
+
+class LoanCompareRequest(BaseModel):
+    """What-If: same principal & term, two annual rates (amortizing loan)."""
+
+    principal: float = Field(gt=0, le=1e12, description="Loan principal (same currency unit throughout).")
+    annual_rate_percent_before: float = Field(ge=0, le=50, description="Nominal APR before, e.g. 3.5 for 3.5%.")
+    annual_rate_percent_after: float = Field(ge=0, le=50, description="Nominal APR after.")
+    loan_months: int = Field(ge=1, le=600, description="Amortization horizon in months.")
+
+
+class LoanSnapshotOut(BaseModel):
+    principal: float
+    annual_rate_percent: float
+    loan_months: int
+    monthly_payment: float
+    total_paid: float
+    total_interest: float
+
+
+class LoanCompareResponse(BaseModel):
+    scenario: Literal["loan_rate_compare"]
+    before: LoanSnapshotOut
+    after: LoanSnapshotOut
+    deltas: dict[str, float]
