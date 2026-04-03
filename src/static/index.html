@@ -65,7 +65,7 @@
 <body>
 
 <div class="container">
-    <h2 class="mb-2">🧠 MAP-RAG Enterprise MVP <span class="badge bg-secondary">v1.8+</span></h2>
+    <h2 class="mb-2">🧠 MAP-RAG Enterprise MVP <span class="badge bg-secondary">v1.9+</span></h2>
     <p class="text-muted small mb-4">客户演示门户：<a href="/demo" class="link-info">/demo</a>（浅色对话界面）</p>
     
     <ul class="nav nav-tabs" id="myTab" role="tablist">
@@ -119,13 +119,16 @@
                     <div class="input-group mb-3">
                         <input type="text" class="form-control" id="chatQuery" placeholder="e.g. What is the 2024 strategic plan?">
                         <button class="btn btn-success" type="button" onclick="sendChat()">Send</button>
+                        <button class="btn btn-outline-success" type="button" title="POST /api/chat/stream (SSE)" onclick="sendChatStream()">Stream</button>
                     </div>
+                    <p id="chatRouteInfo" class="small text-muted mb-2"></p>
                     
                     <h6>System Execution Logs (Anti-Hallucination Graph)</h6>
                     <div class="log-box mb-3" id="chatLogs"></div>
 
                     <h6>Final Answer</h6>
                     <div class="alert alert-info" id="chatAnswer" style="min-height: 50px;">Waiting for query...</div>
+                    <div id="chatCitations" class="mt-2"></div>
                 </div>
             </div>
         </div>
@@ -302,12 +305,37 @@
     }
 
     // --- Chat Logic ---
+    function renderChatCitations(citations) {
+        const el = document.getElementById('chatCitations');
+        if (!citations || !citations.length) {
+            el.innerHTML = '';
+            return;
+        }
+        const items = citations.map(function (c) {
+            return '<li class="list-group-item" style="background:rgba(0,0,0,0.25);border-color:rgba(255,255,255,0.1);">'
+                + '<span class="badge bg-secondary me-2">' + (c.index != null ? c.index : '?') + '</span> '
+                + '<span class="text-info">' + escapeHtml(c.label || '') + '</span>'
+                + '<div class="small text-muted mt-1" style="max-height:72px;overflow:auto;">' + escapeHtml(c.preview || '') + '</div></li>';
+        }).join('');
+        el.innerHTML = '<h6 class="mt-3 mb-2">Citations (retrieval transparency)</h6><ul class="list-group list-group-flush">' + items + '</ul>';
+    }
+
+    function renderHybridRouteInfo(data) {
+        const bits = [];
+        if (data.route) bits.push('route=' + data.route);
+        if (data.effective_route) bits.push('effective=' + data.effective_route);
+        if (data.router_reason) bits.push('reason=' + data.router_reason);
+        document.getElementById('chatRouteInfo').innerText = bits.length ? ('Hybrid: ' + bits.join(' | ')) : '';
+    }
+
     async function sendChat() {
         const query = document.getElementById('chatQuery').value;
         if(!query) return;
 
         document.getElementById('chatLogs').innerHTML = 'Sending query...\n';
         document.getElementById('chatAnswer').innerHTML = '<div class="spinner-border spinner-border-sm text-info" role="status"></div> 正在量子计算合成中...';
+        document.getElementById('chatCitations').innerHTML = '';
+        document.getElementById('chatRouteInfo').innerText = '';
 
         try {
             const response = await fetch('/api/chat', {
@@ -316,9 +344,80 @@
                 body: JSON.stringify({ query: query })
             });
             const data = await response.json();
-            
-            document.getElementById('chatLogs').innerHTML = data.logs.join('\n') + '\n\nDone.';
+            if (!response.ok) {
+                document.getElementById('chatAnswer').innerText = (data && data.detail) ? JSON.stringify(data.detail) : ('HTTP ' + response.status);
+                return;
+            }
+            document.getElementById('chatLogs').innerHTML = (data.logs || []).join('\n') + '\n\nDone.';
             document.getElementById('chatAnswer').innerHTML = marked.parse(data.answer);
+            renderHybridRouteInfo(data);
+            renderChatCitations(data.citations || []);
+        } catch (err) {
+            document.getElementById('chatAnswer').innerText = 'Error: ' + err;
+        }
+    }
+
+    async function sendChatStream() {
+        const query = document.getElementById('chatQuery').value;
+        if (!query) return;
+
+        document.getElementById('chatLogs').innerHTML = 'Opening SSE stream...\n';
+        document.getElementById('chatAnswer').innerHTML = '<div class="spinner-border spinner-border-sm text-info" role="status"></div> Streaming…';
+        document.getElementById('chatCitations').innerHTML = '';
+        document.getElementById('chatRouteInfo').innerText = '';
+
+        try {
+            const response = await fetch('/api/chat/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: query })
+            });
+            if (!response.ok) {
+                const errBody = await response.json().catch(function () { return {}; });
+                document.getElementById('chatAnswer').innerText = errBody.detail ? JSON.stringify(errBody.detail) : ('HTTP ' + response.status);
+                return;
+            }
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            var lineBuf = '';
+            var md = '';
+            while (true) {
+                var chunk = await reader.read();
+                if (chunk.done) break;
+                lineBuf += decoder.decode(chunk.value, { stream: true });
+                var lines = lineBuf.split('\n');
+                lineBuf = lines.pop() || '';
+                for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i];
+                    if (line.indexOf('data: ') !== 0) continue;
+                    var payload = line.slice(6).trim();
+                    if (!payload) continue;
+                    var ev;
+                    try { ev = JSON.parse(payload); } catch (e) { continue; }
+                    if (ev.type === 'meta') {
+                        renderChatCitations(ev.citations || []);
+                        var rb = [];
+                        if (ev.route) rb.push('route=' + ev.route);
+                        if (ev.effective_route) rb.push('effective=' + ev.effective_route);
+                        if (ev.router_reason) rb.push('reason=' + ev.router_reason);
+                        document.getElementById('chatRouteInfo').innerText = rb.length ? ('Hybrid: ' + rb.join(' | ')) : '';
+                        if (ev.logs && ev.logs.length) {
+                            document.getElementById('chatLogs').innerHTML = ev.logs.join('\n');
+                        }
+                    } else if (ev.type === 'token') {
+                        md += (ev.text || '');
+                        document.getElementById('chatAnswer').innerHTML = marked.parse(md);
+                    } else if (ev.type === 'done') {
+                        if (ev.answer) {
+                            md = ev.answer;
+                            document.getElementById('chatAnswer').innerHTML = marked.parse(md);
+                        }
+                        document.getElementById('chatLogs').innerHTML += '\n\nStream done.';
+                    } else if (ev.type === 'error') {
+                        throw new Error(ev.detail || 'stream error');
+                    }
+                }
+            }
         } catch (err) {
             document.getElementById('chatAnswer').innerText = 'Error: ' + err;
         }
@@ -596,7 +695,19 @@
             </div>
         `;
 
-        box.innerHTML = reqInfo + answerHtml + logsHtml + ctxHtml;
+        const cites = responseData.citations || [];
+        const citeParts = cites.slice(0, 12).map(function (c) {
+            return '<div style="margin-bottom:6px;"><span class="badge bg-secondary me-1">' + (c.index != null ? c.index : '?') + '</span> '
+                + escapeHtml(c.label || '') + '<div class="small text-muted">' + escapeHtml((c.preview || '').slice(0, 280)) + '</div></div>';
+        }).join('');
+        const citeHtml = `
+            <div style="margin-bottom:10px;">
+                <b>Citations</b>
+                ${citeParts || '<div class="text-muted">No structured citations.</div>'}
+            </div>
+        `;
+
+        box.innerHTML = reqInfo + answerHtml + citeHtml + logsHtml + ctxHtml;
     }
 
     function renderABCompareDetails(data) {
@@ -611,10 +722,15 @@
                 : '<span class="badge bg-success">Answered</span>';
             const q = item.request_query || '';
             const a = item.answer || '';
+            const cites = item.citations || [];
+            const citeLine = cites.length
+                ? `<div class="small text-muted mb-2">Citations: ${cites.length} snippet(s)</div>`
+                : '';
             return `
                 <div class="mb-3" style="border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:10px;">
                     <div><b>${name}</b> ${badge}</div>
                     <div class="text-muted">query_len=${q.length}</div>
+                    ${citeLine}
                     <div style="margin-top:6px;"><b>Request Query</b></div>
                     <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(q)}</pre>
                     <div><b>Answer (preview)</b></div>
