@@ -35,7 +35,9 @@ from src.rag_core import (
     collection,
     generate_node,
     grade_documents_node,
+    invoke_rag_app,
     jina_rerank,
+    langgraph_stream_log_enabled,
     llm,
     retrieve_parent_documents_expanded,
     vectorstore,
@@ -397,8 +399,23 @@ def run_hybrid_chat_pipeline(question: str) -> dict[str, Any]:
         "loop_count": 0,
         "logs": logs,
     }
+    if langgraph_stream_log_enabled():
+        logger.info(
+            "[Hybrid pipeline] grade+generate (manual nodes, not full LangGraph) | candidates=%s",
+            len(final_texts),
+        )
     state.update(grade_documents_node(state))
+    if langgraph_stream_log_enabled():
+        logger.info(
+            "[Hybrid pipeline] after grade | documents=%s",
+            len(state.get("documents") or []),
+        )
     state.update(generate_node(state))
+    if langgraph_stream_log_enabled():
+        logger.info(
+            "[Hybrid pipeline] after generate | answer_chars=%s",
+            len((state.get("generation") or "")),
+        )
     return {
         "answer": state.get("generation", ""),
         "context_used": state.get("documents", []),
@@ -411,10 +428,8 @@ def run_hybrid_chat_pipeline(question: str) -> dict[str, Any]:
 
 def run_legacy_vector_pipeline(question: str) -> dict[str, Any]:
     """Original LangGraph vector-only pipeline."""
-    from src.rag_core import rag_app
-
     inputs: AgentState = {"question": question, "loop_count": 0, "logs": []}
-    result = rag_app.invoke(inputs)
+    result = invoke_rag_app(inputs)
     return {
         "answer": result["generation"],
         "context_used": result["documents"],

@@ -3,16 +3,26 @@ import logging
 import time
 from typing import Literal
 from fastapi import FastAPI, File, UploadFile, BackgroundTasks, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import uuid
 import uvicorn
+
+# LangSmith: must run before LangChain / LangGraph imports (see src/observability.py).
+from src.observability import init_langsmith_tracing
+
+init_langsmith_tracing()
+
 from src.rag_core import process_document_task, run_chat_pipeline, run_evaluation
 from src.recall_metrics import aggregate_mean
 from src.pdf_extract import PdfExtractError, extract_text_from_pdf_bytes
+from src import debug_data
 
 app = FastAPI(title="MAP-RAG MVP API")
+
+# Read-only LanceDB / Neo4j browser for local debugging; set DEBUG_DATA_API=false to disable.
+DEBUG_DATA_API = os.environ.get("DEBUG_DATA_API", "true").lower() in ("1", "true", "yes")
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +186,11 @@ class EvalBatchRequest(BaseModel):
     cases: list[EvalBatchCase] = Field(min_length=1, max_length=500)
     use_hybrid: bool = False
 
+
+class Neo4jSearchRequest(BaseModel):
+    keywords: list[str] = Field(min_length=1, max_length=20)
+    limit: int = Field(default=40, ge=1, le=100)
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -185,6 +200,19 @@ async def read_root():
     index_path = os.path.join(STATIC_DIR, "index.html")
     with open(index_path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+@app.get("/demo", response_class=HTMLResponse)
+async def read_customer_portal():
+    """Customer-facing demo UI (Plant-inspired enterprise chat layout)."""
+    portal_path = os.path.join(STATIC_DIR, "portal.html")
+    with open(portal_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/portal")
+async def portal_alias():
+    return RedirectResponse(url="/demo", status_code=302)
 
 def _is_pdf_upload(filename: str | None, content_type: str | None) -> bool:
     fn = (filename or "").lower()
@@ -245,6 +273,73 @@ async def get_task_status(task_id: str):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     return tasks[task_id]
+
+
+def _require_debug_data_api() -> None:
+    if not DEBUG_DATA_API:
+        raise HTTPException(
+            status_code=403,
+            detail="Debug data API is disabled. Set environment variable DEBUG_DATA_API=true to enable.",
+        )
+
+
+@app.get("/api/debug/lancedb/summary")
+async def debug_lancedb_summary():
+    """List LanceDB tables and row counts (read-only)."""
+    _require_debug_data_api()
+    try:
+        return debug_data.lancedb_summary()
+    except Exception as e:
+        logger.exception("lancedb summary failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/debug/lancedb/rows")
+async def debug_lancedb_rows(
+    table: str | None = None,
+    limit: int = 40,
+    offset: int = 0,
+    source: str | None = None,
+    parent_id: str | None = None,
+):
+    """Paginated text/metadata preview from a LanceDB table."""
+    _require_debug_data_api()
+    try:
+        out = debug_data.lancedb_rows(
+            table_name=table,
+            limit=limit,
+            offset=offset,
+            source_substring=source,
+            parent_id_substring=parent_id,
+        )
+        if out.get("error"):
+            raise HTTPException(status_code=404, detail=out["error"])
+        return out
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("lancedb rows failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/debug/neo4j/summary")
+async def debug_neo4j_summary():
+    """Entity/relationship counts and sample names (same signal as Hybrid GLOBAL)."""
+    _require_debug_data_api()
+    text, err = debug_data.neo4j_summary_text()
+    if err:
+        raise HTTPException(status_code=503, detail=err)
+    return {"summary": text}
+
+
+@app.post("/api/debug/neo4j/search")
+async def debug_neo4j_search(body: Neo4jSearchRequest):
+    """Keyword search over entity names and relation types (bounded; no arbitrary Cypher)."""
+    _require_debug_data_api()
+    rows, err = debug_data.neo4j_keyword_search(body.keywords, body.limit)
+    if err:
+        raise HTTPException(status_code=400 if "Provide" in err else 503, detail=err)
+    return {"rows": rows, "count": len(rows)}
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest):

@@ -52,6 +52,11 @@
             height: 420px;
             overflow-y: auto;
         }
+        .debug-table { font-size: 0.85rem; color: #e0e0e8; }
+        .debug-table th { color: #00d2ff; border-color: rgba(255,255,255,0.12); }
+        .debug-table td { border-color: rgba(255,255,255,0.08); vertical-align: top; }
+        .metric-bar-wrap { background: rgba(0,0,0,0.35); border-radius: 6px; height: 10px; overflow: hidden; margin-top: 4px; }
+        .metric-bar-fill { height: 100%; background: linear-gradient(90deg, #11998e, #38ef7d); border-radius: 6px; }
 
     </style>
 
@@ -60,7 +65,8 @@
 <body>
 
 <div class="container">
-    <h2 class="mb-4">🧠 MAP-RAG Enterprise MVP <span class="badge bg-secondary">v1.4</span></h2>
+    <h2 class="mb-2">🧠 MAP-RAG Enterprise MVP <span class="badge bg-secondary">v1.8+</span></h2>
+    <p class="text-muted small mb-4">客户演示门户：<a href="/demo" class="link-info">/demo</a>（浅色对话界面）</p>
     
     <ul class="nav nav-tabs" id="myTab" role="tablist">
         <li class="nav-item" role="presentation">
@@ -74,6 +80,12 @@
         </li>
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="chatTest-tab" data-bs-toggle="tab" data-bs-target="#chatTest" type="button" role="tab">4. Chat Test (Memory)</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="lance-tab" data-bs-toggle="tab" data-bs-target="#lancePane" type="button" role="tab">5. LanceDB</button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="neo4j-tab" data-bs-toggle="tab" data-bs-target="#neo4jPane" type="button" role="tab">6. Neo4j</button>
         </li>
     </ul>
 
@@ -133,14 +145,22 @@
                         <label class="form-label">Expected Substring in Document</label>
                         <input type="text" class="form-control" id="evalExpected" placeholder="e.g. CFO">
                     </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="evalUseHybrid">
+                        <label class="form-check-label" for="evalUseHybrid">use_hybrid — use Hybrid RAG retrieval (router + fusion) instead of vector-only</label>
+                    </div>
                     <button class="btn btn-warning" type="button" onclick="runEval()">Run Evaluation</button>
 
                     <hr>
                     <div id="evalResults" style="display:none;">
-                        <h6>Evaluation Metrics (K=1, 3, 5, 10)</h6>
-                        <pre id="metricsJson" style="background:#eee; padding:10px; border-radius:5px;"></pre>
-                        
-                        <h6>Top 3 Retrieved Contexts:</h6>
+                        <h6>Route / mode</h6>
+                        <div id="evalRouteInfo" class="text-muted small mb-2"></div>
+                        <h6>Metrics (Recall / NDCG @K)</h6>
+                        <div id="evalMetricsBars" class="mb-3"></div>
+                        <pre id="metricsJson" style="background:#0b0b10; color:#c8ffd8; padding:10px; border-radius:8px; font-size:0.8rem;"></pre>
+                        <h6>Eval logs</h6>
+                        <pre id="evalLogs" style="background:#0b0b10; color:#a9e9ff; padding:10px; border-radius:8px; font-size:0.75rem; max-height:120px; overflow:auto;"></pre>
+                        <h6>Top 3 Retrieved Contexts</h6>
                         <ul id="topDocsList" class="list-group"></ul>
                     </div>
                 </div>
@@ -175,6 +195,57 @@
                     </div>
 
                     <button class="btn btn-warning" type="button" onclick="resetChatTest()">Reset Session</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. LanceDB Inspector -->
+        <div class="tab-pane fade" id="lancePane" role="tabpanel">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">LanceDB Inspector</h5>
+                    <p class="text-muted">Read-only view of vector table rows (text preview + metadata). Requires <code>DEBUG_DATA_API</code> (default on).</p>
+                    <button type="button" class="btn btn-primary mb-3" onclick="loadLanceSummary()">Refresh summary</button>
+                    <pre id="lanceSummaryOut" class="log-box" style="height:120px;">Click “Refresh summary”.</pre>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-3"><input class="form-control" id="lanceTable" placeholder="table name (default knowledge_base)"></div>
+                        <div class="col-md-2"><input class="form-control" id="lanceLimit" type="number" value="20" min="1" max="80"></div>
+                        <div class="col-md-2"><input class="form-control" id="lanceOffset" type="number" value="0" min="0"></div>
+                        <div class="col-md-2"><input class="form-control" id="lanceFilterSource" placeholder="source contains"></div>
+                        <div class="col-md-3"><input class="form-control" id="lanceFilterPid" placeholder="parent_id contains"></div>
+                    </div>
+                    <button type="button" class="btn btn-success mb-3" onclick="loadLanceRows()">Load rows</button>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-dark debug-table" id="lanceTableEl">
+                            <thead><tr><th>#</th><th>preview</th><th>metadata</th><th>vec</th></tr></thead>
+                            <tbody id="lanceRowsBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="lanceRowsMeta" class="text-muted small"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 6. Neo4j Explorer -->
+        <div class="tab-pane fade" id="neo4jPane" role="tabpanel">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Neo4j Graph Explorer</h5>
+                    <p class="text-muted">Keyword match on entity names and relation types (same bounded query as Hybrid GRAPH path). No arbitrary Cypher.</p>
+                    <button type="button" class="btn btn-primary mb-3" onclick="loadNeo4jSummary()">Load graph summary</button>
+                    <pre id="neo4jSummaryOut" class="log-box" style="height:140px;">Click “Load graph summary”.</pre>
+                    <div class="input-group mb-3">
+                        <input type="text" class="form-control" id="neo4jKeywords" placeholder="keywords comma-separated, e.g. 中信, 银行">
+                        <input type="number" class="form-control" id="neo4jLimit" value="40" min="1" max="100" style="max-width:100px;">
+                        <button class="btn btn-success" type="button" onclick="runNeo4jSearch()">Search relationships</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-dark debug-table">
+                            <thead><tr><th>subject</th><th>predicate</th><th>object</th><th>chunk_id</th><th>source</th></tr></thead>
+                            <tbody id="neo4jRowsBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="neo4jSearchMeta" class="text-muted small"></div>
                 </div>
             </div>
         </div>
@@ -254,9 +325,34 @@
     }
 
     // --- Eval Logic ---
+    function renderEvalMetricsBars(metrics) {
+        const box = document.getElementById('evalMetricsBars');
+        box.innerHTML = '';
+        if (!metrics || typeof metrics !== 'object') return;
+        const row = document.createElement('div');
+        row.className = 'row g-2';
+        const ks = [1, 3, 5, 10];
+        for (const k of ks) {
+            const rk = 'recall@' + k;
+            const nk = 'ndcg@' + k;
+            const rv = Number(metrics[rk]);
+            const nv = Number(metrics[nk]);
+            const col = document.createElement('div');
+            col.className = 'col-md-6 mb-2';
+            col.innerHTML = `
+                <div class="small text-muted">${rk}</div>
+                <div class="metric-bar-wrap"><div class="metric-bar-fill" style="width:${(isFinite(rv) ? rv : 0) * 100}%"></div></div>
+                <div class="small">${isFinite(rv) ? (rv * 100).toFixed(1) : '?'}%</div>
+                <div class="small text-muted">${nk}: ${isFinite(nv) ? nv.toFixed(4) : '?'}</div>`;
+            row.appendChild(col);
+        }
+        box.appendChild(row);
+    }
+
     async function runEval() {
         const query = document.getElementById('evalQuery').value;
         const expected = document.getElementById('evalExpected').value;
+        const useHybrid = document.getElementById('evalUseHybrid').checked;
         if(!query || !expected) return;
 
         document.getElementById('evalResults').style.display = 'none';
@@ -265,7 +361,11 @@
             const response = await fetch('/api/evaluate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: query, expected_substring: expected })
+                body: JSON.stringify({
+                    query: query,
+                    expected_substring: expected,
+                    use_hybrid: useHybrid
+                })
             });
             const data = await response.json();
             
@@ -274,18 +374,27 @@
             }
 
             document.getElementById('evalResults').style.display = 'block';
+            const routeBits = [];
+            if (data.use_hybrid !== undefined) routeBits.push('use_hybrid=' + data.use_hybrid);
+            if (data.route) routeBits.push('route=' + data.route);
+            if (data.effective_route) routeBits.push('effective_route=' + data.effective_route);
+            document.getElementById('evalRouteInfo').innerText = routeBits.join(' | ') || '(vector-only eval)';
             document.getElementById('metricsJson').innerText = JSON.stringify({
-                "Hit_Rank": data.hit_rank,
-                "Metrics": data.metrics
+                hit_rank: data.hit_rank,
+                hit_rank_0: data.hit_rank_0,
+                metrics: data.metrics,
+                metrics_legacy: data.metrics_legacy
             }, null, 2);
+            renderEvalMetricsBars(data.metrics);
+            const logs = (data.eval_logs || []).join('\n');
+            document.getElementById('evalLogs').innerText = logs || '(no eval logs)';
 
             const list = document.getElementById('topDocsList');
             list.innerHTML = '';
-            data.top_3_docs.forEach((doc, idx) => {
+            (data.top_3_docs || []).forEach((doc, idx) => {
                 const li = document.createElement('li');
                 li.className = 'list-group-item';
-                li.innerText = `[Rank ${idx+1}] ${doc}`;
-                // highlight expected substring
+                li.innerText = '[Rank ' + (idx+1) + '] ' + doc;
                 if (doc.toLowerCase().includes(expected.toLowerCase())) {
                     li.classList.add('list-group-item-success');
                 }
@@ -294,6 +403,108 @@
 
         } catch (err) {
             alert('Eval failed: ' + err);
+        }
+    }
+
+    // --- LanceDB / Neo4j debug (read-only APIs) ---
+    async function loadLanceSummary() {
+        const el = document.getElementById('lanceSummaryOut');
+        el.innerText = 'Loading...';
+        try {
+            const res = await fetch('/api/debug/lancedb/summary');
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                el.innerText = 'Error: ' + (data.detail || res.status);
+                return;
+            }
+            el.innerText = JSON.stringify(data, null, 2);
+        } catch (e) {
+            el.innerText = String(e);
+        }
+    }
+
+    async function loadLanceRows() {
+        const tbody = document.getElementById('lanceRowsBody');
+        const meta = document.getElementById('lanceRowsMeta');
+        tbody.innerHTML = '';
+        meta.innerText = 'Loading...';
+        const params = new URLSearchParams();
+        const t = (document.getElementById('lanceTable').value || '').trim();
+        if (t) params.set('table', t);
+        params.set('limit', document.getElementById('lanceLimit').value || '20');
+        params.set('offset', document.getElementById('lanceOffset').value || '0');
+        const fs = (document.getElementById('lanceFilterSource').value || '').trim();
+        const fp = (document.getElementById('lanceFilterPid').value || '').trim();
+        if (fs) params.set('source', fs);
+        if (fp) params.set('parent_id', fp);
+        try {
+            const res = await fetch('/api/debug/lancedb/rows?' + params.toString());
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                meta.innerText = 'Error: ' + (data.detail || res.status);
+                return;
+            }
+            meta.innerText = 'total_after_filter=' + data.total_after_filter +
+                ', truncated_scan=' + (data.truncated_scan ? 'yes (table larger than scan cap)' : 'no');
+            (data.rows || []).forEach((row, i) => {
+                const tr = document.createElement('tr');
+                const md = JSON.stringify(row.metadata || {}, null, 0);
+                const vd = row.has_vector ? ('dim ' + (row.vector_dim || '?')) : '—';
+                tr.innerHTML = '<td>' + (i + 1) + '</td><td><pre style="white-space:pre-wrap;margin:0;color:#ddd;">'
+                    + escapeHtml(row.text_preview || '') + '</pre></td><td><pre style="margin:0;font-size:0.75rem;">'
+                    + escapeHtml(md) + '</pre></td><td>' + escapeHtml(String(vd)) + '</td>';
+                tbody.appendChild(tr);
+            });
+        } catch (e) {
+            meta.innerText = String(e);
+        }
+    }
+
+    async function loadNeo4jSummary() {
+        const el = document.getElementById('neo4jSummaryOut');
+        el.innerText = 'Loading...';
+        try {
+            const res = await fetch('/api/debug/neo4j/summary');
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                el.innerText = 'Error: ' + (data.detail || res.status);
+                return;
+            }
+            el.innerText = data.summary || '(empty)';
+        } catch (e) {
+            el.innerText = String(e);
+        }
+    }
+
+    async function runNeo4jSearch() {
+        const tbody = document.getElementById('neo4jRowsBody');
+        const meta = document.getElementById('neo4jSearchMeta');
+        tbody.innerHTML = '';
+        meta.innerText = 'Loading...';
+        const raw = (document.getElementById('neo4jKeywords').value || '').trim();
+        const kws = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+        const lim = parseInt(document.getElementById('neo4jLimit').value || '40', 10);
+        try {
+            const res = await fetch('/api/debug/neo4j/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ keywords: kws, limit: lim })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                meta.innerText = 'Error: ' + (data.detail || res.status);
+                return;
+            }
+            meta.innerText = 'rows=' + (data.count || 0);
+            (data.rows || []).forEach((r) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = '<td>' + escapeHtml(r.subject || '') + '</td><td>' + escapeHtml(r.predicate || '') +
+                    '</td><td>' + escapeHtml(r.object || '') + '</td><td>' + escapeHtml(r.chunk_id || '') +
+                    '</td><td>' + escapeHtml(r.source || '') + '</td>';
+                tbody.appendChild(tr);
+            });
+        } catch (e) {
+            meta.innerText = String(e);
         }
     }
 

@@ -253,6 +253,8 @@ export NEO4J_PASSWORD="changeme"   # wie in der Compose-Datei
 
 | Dokument | Beschreibung |
 |---|---|
+| [docs/langsmith_observability.md](./docs/langsmith_observability.md) | **LangSmith Observability** — Umgebungsvariablen, Init-Reihenfolge (`src/observability.py`), [offizielle Docs](https://docs.langchain.com/langsmith/observability) |
+| [docs/langgraph_stream_log.md](./docs/langgraph_stream_log.md) | **LangGraph Stream-Logs** — `LANGGRAPH_STREAM_LOG`, `invoke_rag_app` |
 | [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid-RAG-MVP** — Router, Dense+BM25, Neo4j, Fusion-Rerank (`readme-v2-1.md`) |
 | [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — Fälle, Batch-API, `scripts/run_recall_eval.py` |
 | [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ-Benchmark-Plan** — `scripts/benchmark_recall_ndcg.py`, Reports `reports/recall_ndcg_benchmark_*.md` |

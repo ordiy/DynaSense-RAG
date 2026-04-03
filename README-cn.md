@@ -254,6 +254,8 @@ export NEO4J_PASSWORD="changeme"   # 须与 compose 中一致
 
 | 文档 | 说明 |
 |---|---|
+| [docs/langsmith_observability.md](./docs/langsmith_observability.md) | **LangSmith 可观测性** — 环境变量、初始化顺序（`src/observability.py`），[官方文档](https://docs.langchain.com/langsmith/observability) |
+| [docs/langgraph_stream_log.md](./docs/langgraph_stream_log.md) | **LangGraph 流式日志** — `LANGGRAPH_STREAM_LOG`、`invoke_rag_app` 中 `stream_mode="values"` |
 | [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — 路由、Dense+BM25、Neo4j、融合重排（`readme-v2-1.md`） |
 | [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — 用例、批量 API、`scripts/run_recall_eval.py` |
 | [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ 基准方案** — `scripts/benchmark_recall_ndcg.py`，报告 `reports/recall_ndcg_benchmark_*.md` |

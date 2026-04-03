@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DynaSense · 企业知识助手</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --bg: #f0f4f2;
+            --sidebar: linear-gradient(180deg, #ecfdf5 0%, #e0f2f1 100%);
+            --surface: #ffffff;
+            --accent: #0d9488;
+            --accent-hover: #0f766e;
+            --text: #134e4a;
+            --muted: #64748b;
+            --border: rgba(13, 148, 136, 0.18);
+            --user-bubble: #ccfbf1;
+            --ai-bubble: #ffffff;
+            --shadow: 0 4px 24px rgba(15, 118, 110, 0.08);
+        }
+        * { box-sizing: border-box; }
+        .visually-hidden {
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+        }
+        html, body { height: 100%; margin: 0; }
+        body {
+            font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }
+        .app {
+            display: flex;
+            height: 100vh;
+            max-width: 1400px;
+            margin: 0 auto;
+            box-shadow: var(--shadow);
+        }
+        .sidebar {
+            width: 280px;
+            min-width: 260px;
+            background: var(--sidebar);
+            border-right: 1px solid var(--border);
+            padding: 1.5rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .brand-icon {
+            width: 44px; height: 44px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #14b8a6, #0d9488);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.35rem;
+            box-shadow: 0 2px 12px rgba(13, 148, 136, 0.35);
+        }
+        .brand h1 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin: 0;
+            line-height: 1.25;
+            color: var(--text);
+        }
+        .brand span { font-size: 0.75rem; font-weight: 500; color: var(--muted); }
+        .demo-badge {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .hint {
+            font-size: 0.8rem;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+        .prompts-label { font-size: 0.75rem; font-weight: 600; color: var(--muted); margin-top: 0.5rem; }
+        .chips { display: flex; flex-direction: column; gap: 0.5rem; }
+        .chip {
+            text-align: left;
+            padding: 0.65rem 0.85rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.7);
+            color: var(--text);
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .chip:hover {
+            background: #fff;
+            border-color: var(--accent);
+        }
+        .sidebar-footer {
+            margin-top: auto;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+            font-size: 0.75rem;
+        }
+        .sidebar-footer a { color: var(--accent); text-decoration: none; font-weight: 500; }
+        .sidebar-footer a:hover { text-decoration: underline; }
+
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            background: var(--surface);
+        }
+        .main-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+        .main-header h2 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+        .toolbar { display: flex; gap: 0.5rem; align-items: center; }
+        .btn-ghost {
+            padding: 0.45rem 0.9rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: #fff;
+            color: var(--text);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.25rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .msg-row { display: flex; gap: 0.75rem; max-width: 92%; }
+        .msg-row.user { align-self: flex-end; flex-direction: row-reverse; max-width: 85%; }
+        .avatar {
+            width: 36px; height: 36px;
+            border-radius: 10px;
+            flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1rem;
+        }
+        .avatar.ai { background: #ecfdf5; border: 1px solid var(--border); }
+        .avatar.user { background: #e0f2f1; border: 1px solid var(--border); }
+        .bubble {
+            padding: 0.85rem 1.1rem;
+            border-radius: 14px;
+            font-size: 0.92rem;
+            line-height: 1.55;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+        .bubble.ai {
+            background: var(--ai-bubble);
+            border: 1px solid #e2e8f0;
+            color: #1e293b;
+        }
+        .bubble.user { background: var(--user-bubble); border: 1px solid #99f6e4; color: #134e4a; }
+        .bubble.ai pre, .bubble.ai code { background: #f1f5f9; padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.88em; }
+        .meta-line { font-size: 0.72rem; color: var(--muted); margin-top: 0.35rem; }
+        .typing {
+            display: flex; gap: 4px; padding: 0.5rem 0;
+        }
+        .typing span {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: var(--accent);
+            animation: bounce 1.2s infinite ease-in-out;
+        }
+        .typing span:nth-child(2) { animation-delay: 0.15s; }
+        .typing span:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+        .composer-wrap {
+            padding: 1rem 1.5rem 1.25rem;
+            border-top: 1px solid var(--border);
+            background: linear-gradient(180deg, #fafcfb 0%, #fff 100%);
+        }
+        .composer {
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-end;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .composer textarea {
+            flex: 1;
+            min-height: 48px;
+            max-height: 160px;
+            padding: 0.85rem 1.1rem;
+            border-radius: 14px;
+            border: 1px solid #cbd5e1;
+            font-family: inherit;
+            font-size: 0.92rem;
+            resize: vertical;
+            line-height: 1.45;
+        }
+        .composer textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
+        }
+        .btn-send {
+            padding: 0.75rem 1.35rem;
+            border-radius: 12px;
+            border: none;
+            background: linear-gradient(135deg, #14b8a6, #0d9488);
+            color: #fff;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            white-space: nowrap;
+            box-shadow: 0 2px 12px rgba(13, 148, 136, 0.35);
+        }
+        .btn-send:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+        .details-panel {
+            margin-top: 0.75rem;
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+        .details-panel summary { cursor: pointer; user-select: none; font-weight: 600; color: var(--accent); }
+        .details-pre {
+            margin-top: 0.5rem;
+            padding: 0.65rem;
+            background: #f8fafc;
+            border-radius: 8px;
+            overflow: auto;
+            max-height: 140px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        @media (max-width: 768px) {
+            .app { flex-direction: column; height: auto; min-height: 100vh; }
+            .sidebar { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--border); }
+            .msg-row, .msg-row.user { max-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+<div class="app">
+    <aside class="sidebar" aria-label="侧栏">
+        <div class="brand">
+            <div class="brand-icon" aria-hidden="true">🌿</div>
+            <div>
+                <div class="demo-badge">Customer demo</div>
+                <h1>DynaSense<br><span>Knowledge Assistant</span></h1>
+            </div>
+        </div>
+        <p class="hint">面向客户演示：回答基于已上传知识库，具备反幻觉与检索增强能力。多轮对话由服务端会话保持。</p>
+        <div class="prompts-label">示例问题</div>
+        <div class="chips" id="suggestedChips"></div>
+        <div class="sidebar-footer">
+            <a href="/" target="_blank" rel="noopener">工程师控制台</a>
+            <span style="color: var(--muted);"> · 上传文档、评测与调试</span>
+        </div>
+    </aside>
+    <main class="main">
+        <div class="main-header">
+            <h2>对话</h2>
+            <div class="toolbar">
+                <button type="button" class="btn-ghost" id="btnNewChat" title="开始新会话">新对话</button>
+            </div>
+        </div>
+        <div class="messages" id="messages" role="log" aria-live="polite"></div>
+        <div class="composer-wrap">
+            <div class="composer">
+                <label for="inputMsg" class="visually-hidden">输入消息</label>
+                <textarea id="inputMsg" rows="1" placeholder="输入您的问题…（Shift+Enter 换行）" maxlength="2048"></textarea>
+                <button type="button" class="btn-send" id="btnSend">发送</button>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script>
+(function () {
+    const STORAGE_KEY = 'dynasense_portal_conversation_id';
+    const suggested = [
+        '请简要总结知识库中与合规相关的内容要点。',
+        '有哪些关键角色或部门在流程中被提及？',
+        '请用条目形式列出文档中的风险或注意事项。',
+    ];
+
+    const messagesEl = document.getElementById('messages');
+    const inputEl = document.getElementById('inputMsg');
+    const btnSend = document.getElementById('btnSend');
+    const btnNewChat = document.getElementById('btnNewChat');
+    const chipsEl = document.getElementById('suggestedChips');
+
+    const safeRenderer = new marked.Renderer();
+    safeRenderer.html = function () { return ''; };
+
+    function escapeHtml(str) {
+        return String(str)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    function getConversationId() {
+        return localStorage.getItem(STORAGE_KEY) || null;
+    }
+    function setConversationId(id) {
+        if (id) localStorage.setItem(STORAGE_KEY, id);
+        else localStorage.removeItem(STORAGE_KEY);
+    }
+
+    function appendUserBubble(text) {
+        const row = document.createElement('div');
+        row.className = 'msg-row user';
+        row.innerHTML = `
+            <div class="avatar user" aria-hidden="true">您</div>
+            <div class="bubble user">${escapeHtml(text)}</div>`;
+        messagesEl.appendChild(row);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function appendAssistantBubble(htmlContent, meta) {
+        const row = document.createElement('div');
+        row.className = 'msg-row';
+        const details = meta && (meta.logs || meta.context_used) ? `
+            <details class="details-panel">
+                <summary>技术详情（可选）</summary>
+                ${meta.context_used && meta.context_used.length ? `<div class="details-pre">上下文条数: ${meta.context_used.length}</div>` : ''}
+                ${meta.logs && meta.logs.length ? `<div class="details-pre">${escapeHtml(meta.logs.join('\n'))}</div>` : ''}
+            </details>` : '';
+        row.innerHTML = `
+            <div class="avatar ai" aria-hidden="true">AI</div>
+            <div>
+                <div class="bubble ai">${htmlContent}</div>
+                ${meta && meta.memory_mode ? `<div class="meta-line">记忆模式: ${escapeHtml(meta.memory_mode)}</div>` : ''}
+                ${details}
+            </div>`;
+        messagesEl.appendChild(row);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function showTyping() {
+        const row = document.createElement('div');
+        row.className = 'msg-row';
+        row.id = 'typingRow';
+        row.innerHTML = `
+            <div class="avatar ai" aria-hidden="true">AI</div>
+            <div class="bubble ai"><div class="typing" aria-label="正在生成"><span></span><span></span><span></span></div></div>`;
+        messagesEl.appendChild(row);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+    function hideTyping() {
+        document.getElementById('typingRow')?.remove();
+    }
+
+    function welcome() {
+        messagesEl.innerHTML = '';
+        const row = document.createElement('div');
+        row.className = 'msg-row';
+        row.innerHTML = `
+            <div class="avatar ai" aria-hidden="true">AI</div>
+            <div class="bubble ai">
+                您好，我是 <strong>DynaSense</strong> 企业知识助手演示版。<br>
+                请在左侧选择示例问题，或在下方输入您的问题。回答将基于当前知识库内容。
+            </div>`;
+        messagesEl.appendChild(row);
+    }
+
+    suggested.forEach((t) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'chip';
+        b.textContent = t;
+        b.addEventListener('click', () => {
+            inputEl.value = t;
+            inputEl.focus();
+        });
+        chipsEl.appendChild(b);
+    });
+
+    async function send() {
+        const text = (inputEl.value || '').trim();
+        if (!text) return;
+        btnSend.disabled = true;
+        appendUserBubble(text);
+        inputEl.value = '';
+        showTyping();
+
+        try {
+            const res = await fetch('/api/chat/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_id: getConversationId(),
+                    message: text,
+                    memory_mode: 'prioritized',
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            hideTyping();
+            if (!res.ok) {
+                appendAssistantBubble(`<p>请求失败：${escapeHtml(data.detail || res.status)}</p>`, {});
+                return;
+            }
+            if (data.conversation_id) setConversationId(data.conversation_id);
+            const answer = data.answer || '';
+            const html = marked.parse(answer, { renderer: safeRenderer });
+            appendAssistantBubble(html, {
+                logs: data.logs,
+                context_used: data.context_used,
+                memory_mode: data.memory_mode,
+            });
+        } catch (e) {
+            hideTyping();
+            appendAssistantBubble(`<p>网络错误：${escapeHtml(String(e))}</p>`, {});
+        } finally {
+            btnSend.disabled = false;
+            inputEl.focus();
+        }
+    }
+
+    btnSend.addEventListener('click', send);
+    inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            send();
+        }
+    });
+
+    btnNewChat.addEventListener('click', async () => {
+        const cid = getConversationId();
+        if (cid) {
+            try {
+                await fetch('/api/chat/session/' + encodeURIComponent(cid), { method: 'DELETE' });
+            } catch (_) {}
+        }
+        setConversationId(null);
+        welcome();
+    });
+
+    welcome();
+})();
+</script>
+</body>
+</html>

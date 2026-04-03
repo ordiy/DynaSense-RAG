@@ -1,3 +1,10 @@
+"""
+RAG core: LangGraph pipeline, embeddings, LanceDB.
+
+LangSmith: call ``src.observability.init_langsmith_tracing()`` before this module
+is imported (``app.py`` does this for the API server). Standalone scripts should
+call it first if tracing is desired.
+"""
 import os
 import json
 import time
@@ -419,6 +426,48 @@ workflow.add_edge("grade", "generate")
 workflow.add_edge("generate", END)
 rag_app = workflow.compile()
 
+
+def langgraph_stream_log_enabled() -> bool:
+    return os.environ.get("LANGGRAPH_STREAM_LOG", "").lower() in ("1", "true", "yes")
+
+
+def invoke_rag_app(inputs: AgentState) -> AgentState:
+    """
+    Run the vector-only LangGraph. When LANGGRAPH_STREAM_LOG=true, uses ``stream(stream_mode="values")``
+    so each node's state is logged (see LangGraph streaming docs); otherwise ``invoke``.
+    """
+    if not langgraph_stream_log_enabled():
+        return rag_app.invoke(inputs)
+
+    final_state: AgentState | None = None
+    try:
+        for step_idx, state in enumerate(rag_app.stream(inputs, stream_mode="values")):
+            if not isinstance(state, dict):
+                logger.info("[LangGraph stream] step=%s raw=%r", step_idx, state)
+                continue
+            final_state = state  # type: ignore[assignment]
+            docs = state.get("documents") or []
+            n_docs = len(docs) if isinstance(docs, list) else 0
+            gen = state.get("generation") or ""
+            logs = state.get("logs") or []
+            n_log = len(logs) if isinstance(logs, list) else 0
+            logger.info(
+                "[LangGraph stream] step=%s | documents=%s | generation_chars=%s | log_lines=%s",
+                step_idx,
+                n_docs,
+                len(gen) if isinstance(gen, str) else 0,
+                n_log,
+            )
+    except Exception:
+        logger.exception("LangGraph stream failed; falling back to invoke().")
+        return rag_app.invoke(inputs)
+
+    if final_state is None:
+        logger.warning("[LangGraph stream] no chunks; falling back to invoke().")
+        return rag_app.invoke(inputs)
+    return final_state
+
+
 def run_chat_pipeline(query: str):
     """
     Default: Hybrid RAG (router + dense/BM25 + Neo4j + fusion rerank) when HYBRID_RAG_ENABLED=true.
@@ -432,7 +481,7 @@ def run_chat_pipeline(query: str):
         except Exception:
             logger.exception("Hybrid pipeline failed; falling back to vector-only LangGraph.")
     inputs = {"question": query, "loop_count": 0, "logs": []}
-    result = rag_app.invoke(inputs)
+    result = invoke_rag_app(inputs)
     return {
         "answer": result["generation"],
         "context_used": result["documents"],
