@@ -1,0 +1,13 @@
+---
+description: DynaSense MAP-RAG clean architecture and dependency direction
+alwaysApply: true
+---
+
+# Architecture (post-refactor)
+
+- **Dependency direction**: `src/api/` (HTTP) → RAG pipeline (`rag_core`, `hybrid_rag`) → `src/domain/interfaces` (ports) **←** `src/infrastructure/` (adapters). Do not import infrastructure from domain interfaces.
+- **Configuration**: New code uses `src.core.config.get_settings()`; legacy `rag_core` may still read `os.environ` — migrate gradually.
+- **Cross-cutting**: Shared errors live in `src.core.exceptions`; map domain errors to HTTP in `src/api/error_handlers.py` via `register_exception_handlers`.
+- **Citations transparency**: Use `src.core.citations.build_citations_from_context` for any API response that exposes `context_used` strings.
+- **Streaming**: Chat SSE uses `src.rag_core.iter_chat_stream_events` — keep hybrid vs vector dispatch consistent with `run_chat_pipeline`.
+- **Scope**: Avoid drive-by refactors; keep changes aligned with the task. Prefer extending existing patterns over new parallel abstractions.

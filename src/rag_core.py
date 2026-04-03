@@ -12,7 +12,7 @@ import uuid
 import requests
 import lancedb
 import mongomock
-from typing import List, Dict, TypedDict, Tuple, Any
+from typing import Any, Dict, Iterator, List, Tuple, TypedDict
 from pydantic import BaseModel, Field
 
 from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
@@ -194,7 +194,7 @@ def process_document_task(content: str, filename: str, task_state: dict):
             from src.hybrid_rag import ingest_chunks_to_neo4j
 
             chunk_ids = [f"chunk_{parent_id}_{i}" for i in range(len(chunks))]
-            n_triples = ingest_chunks_to_neo4j(chunks, chunk_ids, safe_filename)
+            n_triples = ingest_chunks_to_neo4j(chunks, chunk_ids, filename)
             task_state["graph_triples_ingested"] = n_triples
         except Exception as e:
             logger.warning("Neo4j graph ingest skipped: %s", e)
@@ -416,6 +416,71 @@ def generate_node(state: AgentState):
     return {"generation": generation, "logs": logs}
 
 
+def stream_generation_chunks(question: str, document_strings: List[str]) -> Iterator[str]:
+    """
+    Stream LLM output with the same prompt choice as ``generate_node`` (Vertex ``llm.stream``).
+
+    Yields text fragments; concatenation matches non-streaming generation for the same context.
+    """
+    if not document_strings:
+        yield "抱歉，知识库中未能找到与您问题高度相关的信息，为避免产生误导（幻觉），系统已阻断回答。"
+        return
+    # Match ``generate_node`` context join so streaming and non-stream outputs align.
+    context = "\n".join(document_strings)
+    if _is_analysis_query(question):
+        msgs = GEN_ANALYSIS_PROMPT.format_messages(context=context, question=question)
+    else:
+        msgs = GEN_PROMPT.format_messages(context=context, question=question)
+    for chunk in llm.stream(msgs):
+        text = getattr(chunk, "content", None)
+        if isinstance(text, str) and text:
+            yield text
+        elif isinstance(text, list):
+            for part in text:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    t = part.get("text") or ""
+                    if t:
+                        yield t
+
+
+def iter_vector_chat_stream_events(question: str) -> Iterator[Dict[str, Any]]:
+    """
+    Vector-only path: retrieve → rerank → grade → stream tokens. Used when hybrid is off or fails.
+    """
+    from src.core.citations import build_citations_from_context
+
+    inputs: AgentState = {"question": question, "loop_count": 0, "logs": []}
+    inputs.update(retrieve_and_rerank_node(inputs))
+    inputs.update(grade_documents_node(inputs))
+    docs = inputs.get("documents") or []
+    citations = build_citations_from_context(docs)
+    yield {"type": "meta", "citations": citations, "logs": inputs.get("logs") or []}
+    blocked = "抱歉，知识库中未能找到与您问题高度相关的信息，为避免产生误导（幻觉），系统已阻断回答。"
+    if not docs:
+        yield {"type": "done", "answer": blocked}
+        return
+    parts: List[str] = []
+    for piece in stream_generation_chunks(question, docs):
+        parts.append(piece)
+        yield {"type": "token", "text": piece}
+    yield {"type": "done", "answer": "".join(parts)}
+
+
+def iter_chat_stream_events(question: str) -> Iterator[Dict[str, Any]]:
+    """
+    Product streaming API: dispatch hybrid vs vector, mirroring ``run_chat_pipeline``.
+    """
+    if os.environ.get("HYBRID_RAG_ENABLED", "true").lower() in ("1", "true", "yes"):
+        try:
+            from src.hybrid_rag import iter_hybrid_chat_stream_events
+
+            yield from iter_hybrid_chat_stream_events(question)
+            return
+        except Exception:
+            logger.exception("Hybrid stream failed; falling back to vector-only stream.")
+    yield from iter_vector_chat_stream_events(question)
+
+
 workflow = StateGraph(AgentState)
 workflow.add_node("retrieve", retrieve_and_rerank_node)
 workflow.add_node("grade", grade_documents_node)
@@ -473,19 +538,25 @@ def run_chat_pipeline(query: str):
     Default: Hybrid RAG (router + dense/BM25 + Neo4j + fusion rerank) when HYBRID_RAG_ENABLED=true.
     Fallback: original LangGraph vector-only pipeline on failure or HYBRID_RAG_ENABLED=false.
     """
+    from src.core.citations import build_citations_from_context
+
     if os.environ.get("HYBRID_RAG_ENABLED", "true").lower() in ("1", "true", "yes"):
         try:
             from src.hybrid_rag import run_hybrid_chat_pipeline
 
-            return run_hybrid_chat_pipeline(query)
+            out = run_hybrid_chat_pipeline(query)
+            out["citations"] = build_citations_from_context(out.get("context_used"))
+            return out
         except Exception:
             logger.exception("Hybrid pipeline failed; falling back to vector-only LangGraph.")
     inputs = {"question": query, "loop_count": 0, "logs": []}
     result = invoke_rag_app(inputs)
+    ctx = result["documents"]
     return {
         "answer": result["generation"],
-        "context_used": result["documents"],
+        "context_used": ctx,
         "logs": result["logs"],
+        "citations": build_citations_from_context(ctx),
     }
 
 def reset_knowledge_base() -> None:

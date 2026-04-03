@@ -17,7 +17,8 @@ import hashlib
 import logging
 import os
 import re
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import Any, Iterator, Literal
 
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
@@ -356,10 +357,19 @@ def retrieve_hybrid_ranked_documents(question: str, top_n: int = 10) -> tuple[li
     return ranked, meta
 
 
-def run_hybrid_chat_pipeline(question: str) -> dict[str, Any]:
+@dataclass(frozen=True)
+class HybridPrepared:
+    """State after hybrid retrieval + grader; ready for generate or streaming."""
+
+    state: AgentState
+    decision: RouteDecision
+    effective_route: str
+
+
+def prepare_hybrid_chat(question: str) -> HybridPrepared | dict[str, Any]:
     """
-    End-to-end hybrid retrieval -> grade -> generate.
-    Returns same shape as rag_core.run_chat_pipeline legacy.
+    Run router → candidates → fusion rerank → grade. Returns either an early
+    response dict (empty KB / no hits) or ``HybridPrepared`` for generate/stream.
     """
     logs: list[str] = ["Hybrid RAG pipeline (MVP)"]
 
@@ -410,12 +420,27 @@ def run_hybrid_chat_pipeline(question: str) -> dict[str, Any]:
             "[Hybrid pipeline] after grade | documents=%s",
             len(state.get("documents") or []),
         )
+    return HybridPrepared(state=state, decision=decision, effective_route=effective_route)
+
+
+def run_hybrid_chat_pipeline(question: str) -> dict[str, Any]:
+    """
+    End-to-end hybrid retrieval -> grade -> generate.
+    Returns same shape as rag_core.run_chat_pipeline legacy.
+    """
+    prepared = prepare_hybrid_chat(question)
+    if isinstance(prepared, dict):
+        return prepared
+
+    state = prepared.state
     state.update(generate_node(state))
     if langgraph_stream_log_enabled():
         logger.info(
             "[Hybrid pipeline] after generate | answer_chars=%s",
             len((state.get("generation") or "")),
         )
+    decision = prepared.decision
+    effective_route = prepared.effective_route
     return {
         "answer": state.get("generation", ""),
         "context_used": state.get("documents", []),
@@ -424,6 +449,52 @@ def run_hybrid_chat_pipeline(question: str) -> dict[str, Any]:
         "effective_route": effective_route,
         "router_reason": decision.reason,
     }
+
+
+def iter_hybrid_chat_stream_events(question: str) -> Iterator[dict[str, Any]]:
+    """
+    Yield SSE-friendly event dicts: ``meta`` (citations, route), ``token`` chunks, ``done`` (full answer).
+
+    Reuses ``prepare_hybrid_chat`` then ``stream_generation_chunks`` instead of ``generate_node``.
+    """
+    from src.core.citations import build_citations_from_context
+    from src.rag_core import stream_generation_chunks
+
+    prepared = prepare_hybrid_chat(question)
+    if isinstance(prepared, dict):
+        yield {
+            "type": "meta",
+            "citations": [],
+            "route": prepared.get("route"),
+            "effective_route": prepared.get("effective_route"),
+            "router_reason": prepared.get("router_reason"),
+            "logs": prepared.get("logs") or [],
+        }
+        yield {"type": "done", "answer": prepared.get("answer", "")}
+        return
+
+    state = prepared.state
+    decision = prepared.decision
+    effective_route = prepared.effective_route
+    docs = state.get("documents") or []
+    citations = build_citations_from_context(docs)
+    yield {
+        "type": "meta",
+        "citations": citations,
+        "route": decision.route,
+        "effective_route": effective_route,
+        "router_reason": decision.reason,
+        "logs": state.get("logs") or [],
+    }
+    blocked = "抱歉，知识库中未能找到与您问题高度相关的信息，为避免产生误导（幻觉），系统已阻断回答。"
+    if not docs:
+        yield {"type": "done", "answer": blocked}
+        return
+    parts: list[str] = []
+    for piece in stream_generation_chunks(question, docs):
+        parts.append(piece)
+        yield {"type": "token", "text": piece}
+    yield {"type": "done", "answer": "".join(parts)}
 
 
 def run_legacy_vector_pipeline(question: str) -> dict[str, Any]:

@@ -256,6 +256,7 @@ export NEO4J_PASSWORD="changeme"   # compose と一致させる
 |---|---|
 | [docs/langsmith_observability.md](./docs/langsmith_observability.md) | **LangSmith オブザーバビリティ** — 環境変数、初期化順（`src/observability.py`）、[公式ドキュメント](https://docs.langchain.com/langsmith/observability) |
 | [docs/langgraph_stream_log.md](./docs/langgraph_stream_log.md) | **LangGraph ストリームログ** — `LANGGRAPH_STREAM_LOG`、`invoke_rag_app` |
+| [docs/architecture.md](./docs/architecture.md) | **クリーンアーキテクチャ** — `api/` / `core/` / `domain/` / `infrastructure/` |
 | [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — ルータ、Dense+BM25、Neo4j、融合再ランク（`readme-v2-1.md`） |
 | [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — ケース、バッチ API、`scripts/run_recall_eval.py` |
 | [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ ベンチマーク計画** — `scripts/benchmark_recall_ndcg.py`、レポート `reports/recall_ndcg_benchmark_*.md` |

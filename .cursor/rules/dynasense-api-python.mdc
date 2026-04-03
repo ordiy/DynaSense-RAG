@@ -1,0 +1,12 @@
+---
+description: FastAPI routers, schemas, and tests for this repo
+globs: src/api/**/*.py,tests/**/*.py
+alwaysApply: false
+---
+
+# API & Python conventions
+
+- **Routers**: Thin handlers; call `guard_query_or_raise` on user text where applicable; let `QueryGuardrailError` propagate (handlers return 400).
+- **DTOs**: Pydantic models in `src/api/schemas.py`; keep field limits aligned with `Settings` (`max_query_len`, etc.).
+- **Tests**: Prefer tests that **do not** import `rag_core` / Vertex for `tests/` that run in minimal CI (`requirements-ci.txt`). Use `FastAPI()` + `include_router` for isolated router tests. Full-stack smoke tests live in `tests/test_api_smoke.py` and skip without GCP credentials.
+- **Comments**: Document non-obvious design choices (why guardrails fail-open, why feedback is in-memory).
