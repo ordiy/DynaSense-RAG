@@ -82,10 +82,10 @@
         <div class="tab-pane fade show active" id="upload" role="tabpanel">
             <div class="card">
                 <div class="card-body">
-                    <h5 class="card-title">Upload Knowledge Document (TXT/MD)</h5>
-                    <p class="card-text text-muted">Document will be asynchronously chunked via Jina, embedded via Vertex AI, and stored in LanceDB + MongoDB.</p>
+                    <h5 class="card-title">Upload Knowledge Document (TXT / MD / PDF)</h5>
+                    <p class="card-text text-muted">Text is extracted from PDFs (text-based PDFs; scanned PDFs need OCR). Then: Jina chunking → Vertex embeddings (LanceDB) + MongoDB parent/child; Neo4j triple ingest when enabled.</p>
                     <div class="input-group mb-3">
-                        <input type="file" class="form-control" id="fileInput" accept=".txt,.md">
+                        <input type="file" class="form-control" id="fileInput" accept=".txt,.md,.pdf,application/pdf">
                         <button class="btn btn-primary" type="button" onclick="uploadFile()">Upload & Process</button>
                     </div>
                     

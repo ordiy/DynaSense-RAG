@@ -1,2 +1,3 @@
 # Minimal deps for CI unit tests (no Vertex / LanceDB / LangChain).
 pytest>=8.0
+pypdf>=4.0.0

@@ -10,6 +10,7 @@ import uuid
 import uvicorn
 from src.rag_core import process_document_task, run_chat_pipeline, run_evaluation
 from src.recall_metrics import aggregate_mean
+from src.pdf_extract import PdfExtractError, extract_text_from_pdf_bytes
 
 app = FastAPI(title="MAP-RAG MVP API")
 
@@ -185,6 +186,14 @@ async def read_root():
     with open(index_path, "r", encoding="utf-8") as f:
         return f.read()
 
+def _is_pdf_upload(filename: str | None, content_type: str | None) -> bool:
+    fn = (filename or "").lower()
+    if fn.endswith(".pdf"):
+        return True
+    ct = (content_type or "").lower().split(";")[0].strip()
+    return ct in ("application/pdf", "application/x-pdf")
+
+
 @app.post("/api/upload")
 async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     _cleanup_tasks()
@@ -193,16 +202,42 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Uploaded file is too large.")
 
-    text_content = content.decode("utf-8", errors="replace")
     safe_filename = os.path.basename(file.filename) if file.filename else "upload.txt"
-    
+
+    if _is_pdf_upload(file.filename, file.content_type):
+        try:
+            text_content = extract_text_from_pdf_bytes(content)
+        except PdfExtractError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if not text_content.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No extractable text in PDF (common for scanned-only documents). "
+                    "Use OCR first or upload TXT/MD."
+                ),
+            )
+        ingest_format = "pdf"
+    else:
+        text_content = content.decode("utf-8", errors="replace")
+        ingest_format = "text"
+
     task_id = str(uuid.uuid4())
-    tasks[task_id] = {"status": "pending", "progress": 0, "created_at": time.time()}
-    
-    # Run async processing in background
+    tasks[task_id] = {
+        "status": "pending",
+        "progress": 0,
+        "created_at": time.time(),
+        "ingest_format": ingest_format,
+        "filename": safe_filename,
+    }
+
     background_tasks.add_task(process_document_task, text_content, safe_filename, tasks[task_id])
-    
-    return {"task_id": task_id, "message": "Document uploaded and processing started."}
+
+    return {
+        "task_id": task_id,
+        "message": "Document uploaded and processing started.",
+        "ingest_format": ingest_format,
+    }
 
 @app.get("/api/tasks/{task_id}")
 async def get_task_status(task_id: str):
