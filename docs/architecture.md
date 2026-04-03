@@ -54,6 +54,7 @@ uvicorn src.app:app --host 0.0.0.0 --port 8000
 5. **引用透明**：`src/core/citations.py` 从 `context_used` 文本生成结构化 `citations`。
 6. **反馈与护栏**：`POST /api/feedback`（内存环形缓冲）；可选 `BLOCK_SUSPECT_PII` + `guard_query_or_raise`。
 7. **批量评测脚本**：`scripts/eval_regression.py`（需完整依赖与凭证）。
+8. **查询锚点过滤**：`src/core/query_anchors.py` — 当问题中含机构名、A 股代码等锚点时，在融合重排前剔除不含任一锚点的候选（`QUERY_ANCHOR_FILTER`，默认开启；无匹配时 fail-open 保留原列表）。
 
 ---
 

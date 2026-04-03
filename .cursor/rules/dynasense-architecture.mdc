@@ -10,4 +10,5 @@ alwaysApply: true
 - **Cross-cutting**: Shared errors live in `src.core.exceptions`; map domain errors to HTTP in `src/api/error_handlers.py` via `register_exception_handlers`.
 - **Citations transparency**: Use `src.core.citations.build_citations_from_context` for any API response that exposes `context_used` strings.
 - **Streaming**: Chat SSE uses `src.rag_core.iter_chat_stream_events` — keep hybrid vs vector dispatch consistent with `run_chat_pipeline`.
+- **Retrieval hygiene**: `src.core.query_anchors.filter_documents_by_query_anchors` runs before Jina fusion rerank (hybrid) and vector rerank; gate with `QUERY_ANCHOR_FILTER` env, fail-open if no doc matches anchors.
 - **Scope**: Avoid drive-by refactors; keep changes aligned with the task. Prefer extending existing patterns over new parallel abstractions.

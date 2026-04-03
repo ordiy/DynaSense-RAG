@@ -31,6 +31,7 @@ from src.graph_store import (
     merge_triple,
     query_relationships_by_keywords,
 )
+from src.core.query_anchors import filter_documents_by_query_anchors
 from src.rag_core import (
     AgentState,
     collection,
@@ -269,11 +270,13 @@ def global_context_documents(question: str) -> tuple[list[Document], list[str]]:
 def fusion_rerank_docs(
     question: str, candidates: list[Document], top_n: int = FUSION_TOP_N
 ) -> tuple[list[Document], list[str]]:
-    """Deduplicate, cap pool, Jina cross-encoder rerank; returns ranked Documents."""
+    """Deduplicate, optional anchor filter, cap pool, Jina cross-encoder rerank; returns ranked Documents."""
     logs: list[str] = []
     cand = _dedupe_docs(candidates)
     if not cand:
         return [], ["Fusion: no candidates."]
+    cand, alogs = filter_documents_by_query_anchors(question, cand)
+    logs.extend(alogs)
     pool = cand[:40]
     logs.append(f"Fusion+rerank: pool_size={len(pool)} -> top_n={top_n}")
     ranked = jina_rerank(question, pool, top_n=top_n)

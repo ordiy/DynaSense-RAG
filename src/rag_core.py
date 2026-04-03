@@ -350,6 +350,11 @@ def retrieve_and_rerank_node(state: AgentState):
     expanded_docs, sublogs = retrieve_parent_documents_expanded(state["question"], dense_k=10)
     logs.extend(sublogs)
 
+    from src.core.query_anchors import filter_documents_by_query_anchors
+
+    expanded_docs, alogs = filter_documents_by_query_anchors(state["question"], expanded_docs)
+    logs.extend(alogs)
+
     logs.append(f"Executing Jina Cross-Encoder Rerank (Top 3) on {len(expanded_docs)} Parent Documents")
     reranked_docs = jina_rerank(state["question"], expanded_docs, top_n=3)
 
@@ -579,10 +584,15 @@ def reset_knowledge_base() -> None:
 
 # --- Evaluation Logic ---
 def retrieve_vector_ranked_documents(query: str, top_n: int = 10) -> List[Document]:
-    """Vector-only path: dense Small-to-Big + Jina rerank (for Recall / NDCG)."""
+    """Vector-only path: dense Small-to-Big + optional anchor filter + Jina rerank (for Recall / NDCG)."""
     if not vectorstore:
         return []
     expanded_docs, _ = retrieve_parent_documents_expanded(query, dense_k=10)
+    if not expanded_docs:
+        return []
+    from src.core.query_anchors import filter_documents_by_query_anchors
+
+    expanded_docs, _ = filter_documents_by_query_anchors(query, expanded_docs)
     if not expanded_docs:
         return []
     return jina_rerank(query, expanded_docs, top_n=top_n)
