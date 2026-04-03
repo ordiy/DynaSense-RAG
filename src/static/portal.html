@@ -247,6 +247,56 @@
             white-space: pre-wrap;
             word-break: break-word;
         }
+        .citations-wrap {
+            margin-top: 0.6rem;
+            font-size: 0.78rem;
+        }
+        .citations-title {
+            font-weight: 600;
+            color: var(--accent);
+            margin-bottom: 0.4rem;
+        }
+        .citation-item {
+            padding: 0.45rem 0.55rem;
+            margin-bottom: 0.35rem;
+            background: #f0fdf9;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        .citation-label { font-weight: 600; color: var(--text); }
+        .citation-preview {
+            color: var(--muted);
+            margin-top: 0.2rem;
+            line-height: 1.35;
+            max-height: 3.4em;
+            overflow: hidden;
+        }
+        .route-line {
+            font-size: 0.72rem;
+            color: var(--muted);
+            margin-top: 0.45rem;
+            line-height: 1.4;
+        }
+        .feedback-row {
+            margin-top: 0.65rem;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            flex-wrap: wrap;
+        }
+        .feedback-row > span:first-of-type { font-size: 0.75rem; color: var(--muted); }
+        .fb-btn {
+            border: 1px solid var(--border);
+            background: #fff;
+            border-radius: 8px;
+            padding: 0.2rem 0.55rem;
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1.2;
+        }
+        .fb-btn:hover:not(:disabled) { border-color: var(--accent); background: #f0fdfa; }
+        .fb-btn:disabled { opacity: 0.45; cursor: default; }
+        .fb-done { font-size: 0.72rem; color: var(--accent); min-height: 1em; }
         @media (max-width: 768px) {
             .app { flex-direction: column; height: auto; min-height: 100vh; }
             .sidebar { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--border); }
@@ -335,20 +385,57 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    function buildCitationsHtml(citations) {
+        if (!citations || !citations.length) return '';
+        const items = citations.map(function (c) {
+            return `<div class="citation-item"><span class="citation-label">${escapeHtml(c.label || '')}</span>`
+                + `<div class="citation-preview">${escapeHtml((c.preview || '').slice(0, 400))}</div></div>`;
+        }).join('');
+        return `<div class="citations-wrap"><div class="citations-title">引用来源</div>${items}</div>`;
+    }
+
+    function buildRouteHtml(meta) {
+        const bits = [];
+        if (meta.route) bits.push('路由: ' + meta.route);
+        if (meta.effective_route) bits.push('生效: ' + meta.effective_route);
+        if (meta.router_reason) bits.push(meta.router_reason);
+        if (!bits.length) return '';
+        return `<div class="route-line">${escapeHtml(bits.join(' · '))}</div>`;
+    }
+
     function appendAssistantBubble(htmlContent, meta) {
+        meta = meta || {};
         const row = document.createElement('div');
         row.className = 'msg-row';
+        if (meta.conversation_id) row.dataset.conversationId = meta.conversation_id;
+        if (meta.user_query) row.dataset.userQuery = meta.user_query;
+
+        const citationsHtml = buildCitationsHtml(meta.citations);
+        const routeHtml = buildRouteHtml(meta);
+
         const details = meta && (meta.logs || meta.context_used) ? `
             <details class="details-panel">
                 <summary>技术详情（可选）</summary>
                 ${meta.context_used && meta.context_used.length ? `<div class="details-pre">上下文条数: ${meta.context_used.length}</div>` : ''}
                 ${meta.logs && meta.logs.length ? `<div class="details-pre">${escapeHtml(meta.logs.join('\n'))}</div>` : ''}
             </details>` : '';
+
+        const feedbackHtml = meta.user_query ? `
+            <div class="feedback-row" aria-label="反馈">
+                <span>本次回答是否有帮助？</span>
+                <button type="button" class="fb-btn" data-rating="1" title="有帮助">👍</button>
+                <button type="button" class="fb-btn" data-rating="-1" title="需改进">👎</button>
+                <span class="fb-done" aria-live="polite"></span>
+            </div>` : '';
+
         row.innerHTML = `
             <div class="avatar ai" aria-hidden="true">AI</div>
             <div>
                 <div class="bubble ai">${htmlContent}</div>
+                ${citationsHtml}
+                ${routeHtml}
                 ${meta && meta.memory_mode ? `<div class="meta-line">记忆模式: ${escapeHtml(meta.memory_mode)}</div>` : ''}
+                ${feedbackHtml}
                 ${details}
             </div>`;
         messagesEl.appendChild(row);
@@ -425,6 +512,12 @@
                 logs: data.logs,
                 context_used: data.context_used,
                 memory_mode: data.memory_mode,
+                citations: data.citations || [],
+                route: data.route,
+                effective_route: data.effective_route,
+                router_reason: data.router_reason,
+                user_query: text,
+                conversation_id: data.conversation_id,
             });
         } catch (e) {
             hideTyping();
@@ -452,6 +545,37 @@
         }
         setConversationId(null);
         welcome();
+    });
+
+    messagesEl.addEventListener('click', async function (e) {
+        const btn = e.target.closest('button.fb-btn');
+        if (!btn || !messagesEl.contains(btn)) return;
+        const row = btn.closest('.msg-row');
+        if (!row) return;
+        const rating = parseInt(btn.getAttribute('data-rating'), 10);
+        const q = row.dataset.userQuery || '';
+        const cid = row.dataset.conversationId || '';
+        if (!q || (rating !== 1 && rating !== -1)) return;
+        row.querySelectorAll('.fb-btn').forEach(function (b) { b.disabled = true; });
+        try {
+            const fr = await fetch('/api/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    conversation_id: cid || null,
+                    query: q,
+                    rating: rating,
+                    comment: null,
+                    tags: ['portal'],
+                }),
+            });
+            const done = row.querySelector('.fb-done');
+            if (done) done.textContent = fr.ok ? '已记录，感谢反馈' : '提交失败';
+        } catch (_) {
+            const done = row.querySelector('.fb-done');
+            if (done) done.textContent = '网络异常';
+            row.querySelectorAll('.fb-btn').forEach(function (b) { b.disabled = false; });
+        }
     });
 
     welcome();

@@ -59,6 +59,9 @@ async def chat_session(request: ChatSessionRequest):
             "logs": result.get("logs", []),
             "context_used": result.get("context_used", []),
             "citations": result.get("citations", []),
+            "route": result.get("route"),
+            "effective_route": result.get("effective_route"),
+            "router_reason": result.get("router_reason"),
             "history": [ChatMessage(**m).model_dump() for m in session["messages"]],
         }
     except QueryGuardrailError:
