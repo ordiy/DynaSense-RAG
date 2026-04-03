@@ -65,8 +65,13 @@
 <body>
 
 <div class="container">
-    <h2 class="mb-2">🧠 MAP-RAG Enterprise MVP <span class="badge bg-secondary">v1.9+</span></h2>
-    <p class="text-muted small mb-4">客户演示门户：<a href="/demo" class="link-info">/demo</a>（浅色对话界面）</p>
+    <h2 class="mb-2">🧠 MAP-RAG Enterprise MVP <span class="badge bg-secondary">v1.10+</span></h2>
+    <p class="text-muted small mb-2">客户演示门户：<a href="/demo" class="link-info">/demo</a>（浅色对话界面）</p>
+    <div class="alert alert-secondary py-2 px-3 mb-3 d-flex flex-wrap align-items-center gap-2" style="font-size:0.88rem;background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.12);">
+        <span><strong>Feedback</strong> <span class="text-muted fw-normal">(进程内)</span></span>
+        <span id="feedbackSummaryText" class="text-muted">加载中…</span>
+        <button type="button" class="btn btn-sm btn-outline-info" id="btnFeedbackRefresh" title="GET /api/feedback/summary">Refresh</button>
+    </div>
     
     <ul class="nav nav-tabs" id="myTab" role="tablist">
         <li class="nav-item" role="presentation">
@@ -129,6 +134,12 @@
                     <h6>Final Answer</h6>
                     <div class="alert alert-info" id="chatAnswer" style="min-height: 50px;">Waiting for query...</div>
                     <div id="chatCitations" class="mt-2"></div>
+                    <div id="chatFeedbackRow" class="mt-2 flex-wrap align-items-center gap-2" style="display:none;">
+                        <span class="text-muted small">本次回答是否有帮助？</span>
+                        <button type="button" class="btn btn-sm btn-outline-success fb-console" data-rating="1" title="有帮助">👍</button>
+                        <button type="button" class="btn btn-sm btn-outline-warning fb-console" data-rating="-1" title="需改进">👎</button>
+                        <span id="chatFeedbackDone" class="small text-info"></span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -304,6 +315,97 @@
         }, 1000);
     }
 
+    // --- Feedback: summary bar + RAG Chat thumbs (same /api/feedback as /demo) ---
+    var lastConsoleChatQuery = '';
+
+    async function loadFeedbackSummary() {
+        const el = document.getElementById('feedbackSummaryText');
+        if (!el) return;
+        el.innerText = '…';
+        try {
+            const res = await fetch('/api/feedback/summary');
+            const data = await res.json().catch(function () { return {}; });
+            if (!res.ok) {
+                el.innerText = 'Error ' + res.status;
+                return;
+            }
+            const br = data.by_rating || {};
+            const n1 = br['1'];
+            const nm = br['-1'];
+            const z0 = br['0'];
+            el.innerText = 'n=' + (data.n || 0) + ' · 👍 ' + (n1 != null ? n1 : 0)
+                + ' · 👎 ' + (nm != null ? nm : 0) + ' · neutral ' + (z0 != null ? z0 : 0);
+        } catch (e) {
+            el.innerText = String(e);
+        }
+    }
+
+    async function postFeedbackPayload(body) {
+        const res = await fetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        await loadFeedbackSummary();
+        return res.ok;
+    }
+
+    function showConsoleChatFeedback(query) {
+        lastConsoleChatQuery = (query || '').trim();
+        const row = document.getElementById('chatFeedbackRow');
+        const done = document.getElementById('chatFeedbackDone');
+        if (!row) return;
+        if (!lastConsoleChatQuery) {
+            row.style.display = 'none';
+            return;
+        }
+        row.style.display = 'flex';
+        row.classList.add('d-flex');
+        if (done) done.innerText = '';
+        row.querySelectorAll('.fb-console').forEach(function (b) { b.disabled = false; });
+    }
+
+    function hideConsoleChatFeedback() {
+        const row = document.getElementById('chatFeedbackRow');
+        if (row) row.style.display = 'none';
+        lastConsoleChatQuery = '';
+    }
+
+    async function submitConsoleChatFeedback(rating) {
+        if (!lastConsoleChatQuery) return;
+        const row = document.getElementById('chatFeedbackRow');
+        if (row) row.querySelectorAll('.fb-console').forEach(function (b) { b.disabled = true; });
+        const ok = await postFeedbackPayload({
+            query: lastConsoleChatQuery,
+            rating: rating,
+            conversation_id: null,
+            comment: null,
+            tags: ['console', 'rag_chat'],
+        });
+        const done = document.getElementById('chatFeedbackDone');
+        if (done) done.innerText = ok ? '已记录' : '提交失败';
+    }
+
+    function initFeedbackConsoleUi() {
+        loadFeedbackSummary();
+        const btn = document.getElementById('btnFeedbackRefresh');
+        if (btn) btn.addEventListener('click', loadFeedbackSummary);
+        const fr = document.getElementById('chatFeedbackRow');
+        if (fr) {
+            fr.addEventListener('click', function (e) {
+                const b = e.target.closest('.fb-console');
+                if (!b) return;
+                const r = parseInt(b.getAttribute('data-rating'), 10);
+                if (r === 1 || r === -1) submitConsoleChatFeedback(r);
+            });
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initFeedbackConsoleUi);
+    } else {
+        initFeedbackConsoleUi();
+    }
+
     // --- Chat Logic ---
     function renderChatCitations(citations) {
         const el = document.getElementById('chatCitations');
@@ -336,6 +438,7 @@
         document.getElementById('chatAnswer').innerHTML = '<div class="spinner-border spinner-border-sm text-info" role="status"></div> 正在量子计算合成中...';
         document.getElementById('chatCitations').innerHTML = '';
         document.getElementById('chatRouteInfo').innerText = '';
+        hideConsoleChatFeedback();
 
         try {
             const response = await fetch('/api/chat', {
@@ -346,14 +449,17 @@
             const data = await response.json();
             if (!response.ok) {
                 document.getElementById('chatAnswer').innerText = (data && data.detail) ? JSON.stringify(data.detail) : ('HTTP ' + response.status);
+                hideConsoleChatFeedback();
                 return;
             }
             document.getElementById('chatLogs').innerHTML = (data.logs || []).join('\n') + '\n\nDone.';
             document.getElementById('chatAnswer').innerHTML = marked.parse(data.answer);
             renderHybridRouteInfo(data);
             renderChatCitations(data.citations || []);
+            showConsoleChatFeedback(query);
         } catch (err) {
             document.getElementById('chatAnswer').innerText = 'Error: ' + err;
+            hideConsoleChatFeedback();
         }
     }
 
@@ -365,6 +471,7 @@
         document.getElementById('chatAnswer').innerHTML = '<div class="spinner-border spinner-border-sm text-info" role="status"></div> Streaming…';
         document.getElementById('chatCitations').innerHTML = '';
         document.getElementById('chatRouteInfo').innerText = '';
+        hideConsoleChatFeedback();
 
         try {
             const response = await fetch('/api/chat/stream', {
@@ -375,6 +482,7 @@
             if (!response.ok) {
                 const errBody = await response.json().catch(function () { return {}; });
                 document.getElementById('chatAnswer').innerText = errBody.detail ? JSON.stringify(errBody.detail) : ('HTTP ' + response.status);
+                hideConsoleChatFeedback();
                 return;
             }
             const reader = response.body.getReader();
@@ -418,8 +526,10 @@
                     }
                 }
             }
+            showConsoleChatFeedback(query);
         } catch (err) {
             document.getElementById('chatAnswer').innerText = 'Error: ' + err;
+            hideConsoleChatFeedback();
         }
     }
 
@@ -654,7 +764,7 @@
         box.innerHTML = parts.join('');
     }
 
-    function renderChatTestDetails(responseData) {
+    function renderChatTestDetails(responseData, lastUserMessage) {
         const box = document.getElementById('chatTestDetails');
         const requestQuery = responseData.request_query || '';
 
@@ -708,6 +818,55 @@
         `;
 
         box.innerHTML = reqInfo + answerHtml + citeHtml + logsHtml + ctxHtml;
+
+        const um = (lastUserMessage || '').trim();
+        if (um) {
+            const wrap = document.createElement('div');
+            wrap.className = 'mt-2 d-flex flex-wrap align-items-center gap-2';
+            const lbl = document.createElement('span');
+            lbl.className = 'small text-muted';
+            lbl.textContent = 'Rate this turn (memory session):';
+            const b1 = document.createElement('button');
+            b1.type = 'button';
+            b1.className = 'btn btn-sm btn-outline-success';
+            b1.textContent = '👍';
+            const b2 = document.createElement('button');
+            b2.type = 'button';
+            b2.className = 'btn btn-sm btn-outline-warning';
+            b2.textContent = '👎';
+            const done = document.createElement('span');
+            done.className = 'small text-info';
+            wrap.appendChild(lbl);
+            wrap.appendChild(b1);
+            wrap.appendChild(b2);
+            wrap.appendChild(done);
+            box.appendChild(wrap);
+            const cid = responseData.conversation_id || '';
+            b1.addEventListener('click', async function () {
+                b1.disabled = true;
+                b2.disabled = true;
+                const ok = await postFeedbackPayload({
+                    query: um,
+                    rating: 1,
+                    conversation_id: cid || null,
+                    comment: null,
+                    tags: ['console', 'chat_session'],
+                });
+                done.textContent = ok ? '已记录' : '失败';
+            });
+            b2.addEventListener('click', async function () {
+                b1.disabled = true;
+                b2.disabled = true;
+                const ok = await postFeedbackPayload({
+                    query: um,
+                    rating: -1,
+                    conversation_id: cid || null,
+                    comment: null,
+                    tags: ['console', 'chat_session'],
+                });
+                done.textContent = ok ? '已记录' : '失败';
+            });
+        }
     }
 
     function renderABCompareDetails(data) {
@@ -811,7 +970,7 @@
             chatTestConversationId = data.conversation_id || chatTestConversationId;
             chatTestMessages = Array.isArray(data.history) ? data.history : chatTestMessages;
             renderChatTestConversation();
-            renderChatTestDetails(data);
+            renderChatTestDetails(data, userMsg);
         } catch (err) {
             document.getElementById('chatTestDetails').innerHTML =
                 `<div class="alert alert-warning">Error: ${escapeHtml(err && err.message ? err.message : err)}</div>`;
