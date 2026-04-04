@@ -88,3 +88,26 @@ class LoanCompareResponse(BaseModel):
     before: LoanSnapshotOut
     after: LoanSnapshotOut
     deltas: dict[str, float]
+
+
+class ConstrainedGraphRequest(BaseModel):
+    """Whitelisted graph templates only — no arbitrary Cypher (see graph_constrained_queries)."""
+
+    template: Literal["edges_from_entity", "multi_keyword_edges", "graph_global_summary"]
+    params: dict = Field(default_factory=dict)
+
+
+class ConstrainedGraphSuggestRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=_MAX_Q)
+
+
+class ConstrainedGraphResponse(BaseModel):
+    template_id: str
+    rows: list[dict]
+    logs: list[str]
+
+
+class ConstrainedGraphSuggestResponse(BaseModel):
+    template_id: str | None
+    params: dict
+    executed: ConstrainedGraphResponse | None = None
