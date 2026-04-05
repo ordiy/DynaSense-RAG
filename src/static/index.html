@@ -87,10 +87,10 @@
             <button class="nav-link" id="chatTest-tab" data-bs-toggle="tab" data-bs-target="#chatTest" type="button" role="tab">4. Chat Test (Memory)</button>
         </li>
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="lance-tab" data-bs-toggle="tab" data-bs-target="#lancePane" type="button" role="tab">5. LanceDB</button>
+            <button class="nav-link" id="lance-tab" data-bs-toggle="tab" data-bs-target="#lancePane" type="button" role="tab">5. PG vectors</button>
         </li>
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="neo4j-tab" data-bs-toggle="tab" data-bs-target="#neo4jPane" type="button" role="tab">6. Neo4j</button>
+            <button class="nav-link" id="neo4j-tab" data-bs-toggle="tab" data-bs-target="#neo4jPane" type="button" role="tab">6. Graph</button>
         </li>
     </ul>
 
@@ -100,7 +100,7 @@
             <div class="card">
                 <div class="card-body">
                     <h5 class="card-title">Upload Knowledge Document (TXT / MD / PDF)</h5>
-                    <p class="card-text text-muted">Text is extracted from PDFs (text-based PDFs; scanned PDFs need OCR). Then: Jina chunking → Vertex embeddings (LanceDB) + MongoDB parent/child; Neo4j triple ingest when enabled.</p>
+                    <p class="card-text text-muted">Text is extracted from PDFs (text-based PDFs; scanned PDFs need OCR). Then: Jina chunking → Vertex embeddings into PostgreSQL (pgvector + JSONB parent/child); optional graph triple ingest when enabled.</p>
                     <div class="input-group mb-3">
                         <input type="file" class="form-control" id="fileInput" accept=".txt,.md,.pdf,application/pdf">
                         <button class="btn btn-primary" type="button" onclick="uploadFile()">Upload & Process</button>
@@ -213,20 +213,19 @@
             </div>
         </div>
 
-        <!-- 5. LanceDB Inspector -->
+        <!-- 5. PostgreSQL kb_embedding inspector -->
         <div class="tab-pane fade" id="lancePane" role="tabpanel">
             <div class="card">
                 <div class="card-body">
-                    <h5 class="card-title">LanceDB Inspector</h5>
-                    <p class="text-muted">Read-only view of vector table rows (text preview + metadata). Requires <code>DEBUG_DATA_API</code> (default on).</p>
+                    <h5 class="card-title">PostgreSQL vector table (<code>kb_embedding</code>)</h5>
+                    <p class="text-muted">Read-only view of embedding rows (text preview + metadata). Requires <code>DEBUG_DATA_API</code> (default on).</p>
                     <button type="button" class="btn btn-primary mb-3" onclick="loadLanceSummary()">Refresh summary</button>
                     <pre id="lanceSummaryOut" class="log-box" style="height:120px;">Click “Refresh summary”.</pre>
                     <div class="row g-2 mb-2">
-                        <div class="col-md-3"><input class="form-control" id="lanceTable" placeholder="table name (default knowledge_base)"></div>
                         <div class="col-md-2"><input class="form-control" id="lanceLimit" type="number" value="20" min="1" max="80"></div>
                         <div class="col-md-2"><input class="form-control" id="lanceOffset" type="number" value="0" min="0"></div>
-                        <div class="col-md-2"><input class="form-control" id="lanceFilterSource" placeholder="source contains"></div>
-                        <div class="col-md-3"><input class="form-control" id="lanceFilterPid" placeholder="parent_id contains"></div>
+                        <div class="col-md-4"><input class="form-control" id="lanceFilterSource" placeholder="source contains"></div>
+                        <div class="col-md-4"><input class="form-control" id="lanceFilterPid" placeholder="parent_id contains"></div>
                     </div>
                     <button type="button" class="btn btn-success mb-3" onclick="loadLanceRows()">Load rows</button>
                     <div class="table-responsive">
@@ -240,11 +239,11 @@
             </div>
         </div>
 
-        <!-- 6. Neo4j Explorer -->
+        <!-- 6. Graph explorer (PostgreSQL) -->
         <div class="tab-pane fade" id="neo4jPane" role="tabpanel">
             <div class="card">
                 <div class="card-body">
-                    <h5 class="card-title">Neo4j Graph Explorer</h5>
+                    <h5 class="card-title">Graph explorer</h5>
                     <p class="text-muted">Keyword match on entity names and relation types (same bounded query as Hybrid GRAPH path). No arbitrary Cypher.</p>
                     <button type="button" class="btn btn-primary mb-3" onclick="loadNeo4jSummary()">Load graph summary</button>
                     <pre id="neo4jSummaryOut" class="log-box" style="height:140px;">Click “Load graph summary”.</pre>
@@ -615,12 +614,12 @@
         }
     }
 
-    // --- LanceDB / Neo4j debug (read-only APIs) ---
+    // --- PostgreSQL kb_embedding / graph debug (read-only APIs) ---
     async function loadLanceSummary() {
         const el = document.getElementById('lanceSummaryOut');
         el.innerText = 'Loading...';
         try {
-            const res = await fetch('/api/debug/lancedb/summary');
+            const res = await fetch('/api/debug/pg/kb_embedding/summary');
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 el.innerText = 'Error: ' + (data.detail || res.status);
@@ -638,8 +637,6 @@
         tbody.innerHTML = '';
         meta.innerText = 'Loading...';
         const params = new URLSearchParams();
-        const t = (document.getElementById('lanceTable').value || '').trim();
-        if (t) params.set('table', t);
         params.set('limit', document.getElementById('lanceLimit').value || '20');
         params.set('offset', document.getElementById('lanceOffset').value || '0');
         const fs = (document.getElementById('lanceFilterSource').value || '').trim();
@@ -647,7 +644,7 @@
         if (fs) params.set('source', fs);
         if (fp) params.set('parent_id', fp);
         try {
-            const res = await fetch('/api/debug/lancedb/rows?' + params.toString());
+            const res = await fetch('/api/debug/pg/kb_embedding/rows?' + params.toString());
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 meta.innerText = 'Error: ' + (data.detail || res.status);
@@ -658,7 +655,7 @@
             (data.rows || []).forEach((row, i) => {
                 const tr = document.createElement('tr');
                 const md = JSON.stringify(row.metadata || {}, null, 0);
-                const vd = row.has_vector ? ('dim ' + (row.vector_dim || '?')) : '—';
+                const vd = row.has_vector ? 'yes' : '—';
                 tr.innerHTML = '<td>' + (i + 1) + '</td><td><pre style="white-space:pre-wrap;margin:0;color:#ddd;">'
                     + escapeHtml(row.text_preview || '') + '</pre></td><td><pre style="margin:0;font-size:0.75rem;">'
                     + escapeHtml(md) + '</pre></td><td>' + escapeHtml(String(vd)) + '</td>';
@@ -673,7 +670,7 @@
         const el = document.getElementById('neo4jSummaryOut');
         el.innerText = 'Loading...';
         try {
-            const res = await fetch('/api/debug/neo4j/summary');
+            const res = await fetch('/api/debug/graph/summary');
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 el.innerText = 'Error: ' + (data.detail || res.status);
@@ -694,7 +691,7 @@
         const kws = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
         const lim = parseInt(document.getElementById('neo4jLimit').value || '40', 10);
         try {
-            const res = await fetch('/api/debug/neo4j/search', {
+            const res = await fetch('/api/debug/graph/search', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ keywords: kws, limit: lim })

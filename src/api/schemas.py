@@ -45,7 +45,7 @@ class EvalBatchRequest(BaseModel):
     use_hybrid: bool = False
 
 
-class Neo4jSearchRequest(BaseModel):
+class GraphSearchRequest(BaseModel):
     keywords: list[str] = Field(min_length=1, max_length=20)
     limit: int = Field(default=40, ge=1, le=100)
 

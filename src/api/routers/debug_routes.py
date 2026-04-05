@@ -1,4 +1,4 @@
-"""Read-only LanceDB / Neo4j debug API."""
+"""Read-only PostgreSQL / graph debug API."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from src.api.schemas import (
     ConstrainedGraphResponse,
     ConstrainedGraphSuggestRequest,
     ConstrainedGraphSuggestResponse,
-    Neo4jSearchRequest,
+    GraphSearchRequest,
 )
 from src.core.graph_constrained_queries import (
     execute_constrained_template,
@@ -32,19 +32,29 @@ def _require_debug_data_api() -> None:
         )
 
 
-@router.get("/lancedb/summary")
-async def debug_lancedb_summary():
+@router.get("/pg/summary")
+async def debug_pg_summary():
+    """Row counts for unified KB + graph triples (PostgreSQL)."""
     _require_debug_data_api()
     try:
-        return debug_data.lancedb_summary()
+        return debug_data.postgres_storage_summary()
     except Exception as e:
-        logger.exception("lancedb summary failed")
+        logger.exception("postgres summary failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/lancedb/rows")
-async def debug_lancedb_rows(
-    table: str | None = None,
+@router.get("/pg/kb_embedding/summary")
+async def debug_kb_embedding_summary():
+    _require_debug_data_api()
+    try:
+        return debug_data.kb_embedding_summary()
+    except Exception as e:
+        logger.exception("kb_embedding summary failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/pg/kb_embedding/rows")
+async def debug_kb_embedding_rows(
     limit: int = 40,
     offset: int = 0,
     source: str | None = None,
@@ -52,36 +62,35 @@ async def debug_lancedb_rows(
 ):
     _require_debug_data_api()
     try:
-        out = debug_data.lancedb_rows(
-            table_name=table,
+        out = debug_data.kb_embedding_rows(
             limit=limit,
             offset=offset,
             source_substring=source,
             parent_id_substring=parent_id,
         )
-        if out.get("error"):
-            raise HTTPException(status_code=404, detail=out["error"])
+        if out.get("error") and not out.get("rows"):
+            raise HTTPException(status_code=503, detail=out["error"])
         return out
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("lancedb rows failed")
+        logger.exception("kb_embedding rows failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/neo4j/summary")
-async def debug_neo4j_summary():
+@router.get("/graph/summary")
+async def debug_graph_summary():
     _require_debug_data_api()
-    text, err = debug_data.neo4j_summary_text()
+    text, err = debug_data.graph_summary_text()
     if err:
         raise HTTPException(status_code=503, detail=err)
     return {"summary": text}
 
 
-@router.post("/neo4j/search")
-async def debug_neo4j_search(body: Neo4jSearchRequest):
+@router.post("/graph/search")
+async def debug_graph_search(body: GraphSearchRequest):
     _require_debug_data_api()
-    rows, err = debug_data.neo4j_keyword_search(body.keywords, body.limit)
+    rows, err = debug_data.graph_keyword_search(body.keywords, body.limit)
     if err:
         raise HTTPException(status_code=400 if "Provide" in err else 503, detail=err)
     return {"rows": rows, "count": len(rows)}

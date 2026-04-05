@@ -16,6 +16,7 @@ init_langsmith_tracing()
 
 from src.api.error_handlers import register_exception_handlers
 from src.api.routers import (  # noqa: E402
+    analytics,
     chat,
     debug_routes,
     eval,
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
 
     application.include_router(pages.router)
     application.include_router(ingest.router)
+    application.include_router(analytics.router)
     application.include_router(debug_routes.router)
     application.include_router(chat.router)
     application.include_router(session.router)

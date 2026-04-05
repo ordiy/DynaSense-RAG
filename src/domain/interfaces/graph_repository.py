@@ -1,7 +1,7 @@
 """
-Graph persistence port (Neo4j or any future backend).
+Graph persistence port (PostgreSQL AGE / relational triples).
 
-Agent / use-case code should depend on this protocol, not on ``neo4j`` driver types.
+Agent / use-case code should depend on this protocol, not on concrete driver types.
 """
 from __future__ import annotations
 

@@ -1,13 +1,23 @@
 import os
+import sys
 import json
 import requests
-import lancedb
+from pathlib import Path
 from typing import List, TypedDict
 from pydantic import BaseModel, Field
 
 from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
-from langchain_community.vectorstores import LanceDB
 from langchain_core.documents import Document
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+if not os.environ.get("DATABASE_URL"):
+    raise SystemExit("Set DATABASE_URL for PostgreSQL + pgvector.")
+
+from src.infrastructure.persistence.postgres_connection import init_pool, get_pool
+from src.infrastructure.persistence.postgres_schema import ensure_schema, truncate_kb_storage
+from src.infrastructure.persistence.postgres_vectorstore import PostgresVectorStore
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph, START
 
@@ -111,18 +121,19 @@ for doc in raw_docs:
 
 print(f"Original docs: {len(raw_docs)}, Total chunks after Jina: {len(chunked_documents)}")
 
-print("Indexing to LanceDB (for Vector)...")
-db_lance = lancedb.connect("/tmp/lancedb_mvp_v3")
-table_name = "doc_chunks_v3"
-if table_name in db_lance.table_names():
-    db_lance.drop_table(table_name)
-
-vectorstore = LanceDB.from_documents(
-    documents=chunked_documents,
-    embedding=doc_embeddings,
-    connection=db_lance,
-    table_name=table_name
-)
+print("Indexing to PostgreSQL kb_embedding (vectors)...")
+init_pool(os.environ["DATABASE_URL"])
+ensure_schema(get_pool())
+truncate_kb_storage(get_pool())
+vs = PostgresVectorStore(get_pool(), doc_embeddings)
+texts = [d.page_content for d in chunked_documents]
+embeds = doc_embeddings.embed_documents(texts)
+rows = [
+    (str(d.metadata["id"]), d.page_content, dict(d.metadata), embeds[j])
+    for j, d in enumerate(chunked_documents)
+]
+vs.add_embedding_rows(rows)
+vectorstore = vs
 
 # Fetch Top K=10 to give Cross-Encoder more candidate pool
 retriever = vectorstore.as_retriever(search_kwargs={"k": 10})

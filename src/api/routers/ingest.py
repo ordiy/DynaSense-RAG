@@ -10,19 +10,12 @@ from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
 from src.api import state
 from src.api.state import cleanup_tasks as _cleanup_tasks
+from src.api.upload_validation import is_allowed_text_upload, is_pdf_upload
 from src.core.config import get_settings
 from src.pdf_extract import PdfExtractError, extract_text_from_pdf_bytes
 from src.rag_core import process_document_task
 
 router = APIRouter(prefix="/api", tags=["ingest"])
-
-
-def _is_pdf_upload(filename: str | None, content_type: str | None) -> bool:
-    fn = (filename or "").lower()
-    if fn.endswith(".pdf"):
-        return True
-    ct = (content_type or "").lower().split(";")[0].strip()
-    return ct in ("application/pdf", "application/x-pdf")
 
 
 @router.post("/upload")
@@ -35,7 +28,7 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
 
     safe_filename = os.path.basename(file.filename) if file.filename else "upload.txt"
 
-    if _is_pdf_upload(file.filename, file.content_type):
+    if is_pdf_upload(file.filename, file.content_type):
         try:
             text_content = extract_text_from_pdf_bytes(content)
         except PdfExtractError as e:
@@ -50,6 +43,14 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
             )
         ingest_format = "pdf"
     else:
+        if not is_allowed_text_upload(file.filename):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "For non-PDF uploads, use a .txt, .md, or .markdown filename, "
+                    "or upload a .pdf file."
+                ),
+            )
         text_content = content.decode("utf-8", errors="replace")
         ingest_format = "text"
 

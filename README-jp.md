@@ -229,16 +229,16 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # 2. 依存関係のインストール
-pip install langchain langchain-google-vertexai langgraph lancedb==0.5.2 pydantic bs4 pandas numpy jina requests mongomock datasets polars
+pip install -r requirements.txt
 
-# 3. API キーと GCP 設定
+# 3. API キー、GCP、PostgreSQL
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-sa.json"
 export JINA_API_KEY="your-jina-api-key"
 
-# 4.（任意）ローカル Neo4j（Hybrid RAG 用）
-docker compose -f docker-compose.neo4j.yml up -d
-export NEO4J_PASSWORD="changeme"   # compose と一致させる
+# 4. PostgreSQL + pgvector（ストレージに必須）
+docker compose -f docker-compose.postgres.yml up -d
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
 
 # 5. Web サーバーの起動
 .venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000

@@ -1,0 +1,21 @@
+# PostgreSQL + pgvector + Apache AGE (see docs/postgresql_storage_roadmap.md).
+#
+#   docker compose -f docker-compose.postgres.yml up -d
+#   export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
+#
+# Image: https://hub.docker.com/r/brcom/postgres-age-vector (pg16 + AGE + pgvector)
+
+services:
+  postgres:
+    image: brcom/postgres-age-vector:pg16v2
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: map_rag
+    volumes:
+      - pgdata_map_rag:/var/lib/postgresql/data
+
+volumes:
+  pgdata_map_rag:

@@ -1,5 +1,5 @@
 """
-Constrained Neo4j access (alternative to GraphCypherQAChain).
+Constrained graph access (PostgreSQL AGE / relational triples; alternative to GraphCypherQAChain).
 
 Design:
 - Only **whitelisted template ids** map to **fixed, parameterized** Cypher or to
@@ -64,7 +64,7 @@ def _tpl_edges_from_entity(params: dict[str, Any]) -> ConstrainedGraphResult:
         return ConstrainedGraphResult(
             "edges_from_entity",
             [],
-            ["Neo4j unavailable; no rows."],
+            ["Graph backend unavailable; no rows."],
         )
     rows = query_relationships_by_keywords([sub], limit=lim)
     logs = [f"edges_from_entity: keywords=[{sub!r}] limit={lim} rows={len(rows)}"]
@@ -82,7 +82,7 @@ def _tpl_multi_keyword_edges(params: dict[str, Any]) -> ConstrainedGraphResult:
         raise ValueError("at least one keyword required")
     lim = _validate_limit(params.get("limit"), default=40, cap=100)
     if not get_driver():
-        return ConstrainedGraphResult("multi_keyword_edges", [], ["Neo4j unavailable; no rows."])
+        return ConstrainedGraphResult("multi_keyword_edges", [], ["Graph backend unavailable; no rows."])
     rows = query_relationships_by_keywords(kws, limit=lim)
     logs = [f"multi_keyword_edges: n_kw={len(kws)} limit={lim} rows={len(rows)}"]
     return ConstrainedGraphResult("multi_keyword_edges", rows, logs)
@@ -93,7 +93,7 @@ def _tpl_graph_global_summary(_params: dict[str, Any]) -> ConstrainedGraphResult
         return ConstrainedGraphResult(
             "graph_global_summary",
             [],
-            ["Neo4j unavailable; empty summary."],
+            ["Graph backend unavailable; empty summary."],
         )
     text = global_graph_summary()
     rows = [{"summary": text}] if text else []

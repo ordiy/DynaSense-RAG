@@ -1,5 +1,5 @@
 """
-Hybrid RAG MVP: Query Router + Dense/BM25 vector path + Neo4j graph path + unified rerank.
+Hybrid RAG MVP: Query Router + Dense/BM25 vector path + PostgreSQL graph path + unified rerank.
 
 Implements readme-v2-1.md topology at MVP scope:
   - Intent router: VECTOR | GRAPH | GLOBAL | HYBRID (LLM structured output)
@@ -164,8 +164,8 @@ def extract_triples_from_text(text: str) -> list[TripleItem]:
         return []
 
 
-def ingest_chunks_to_neo4j(chunks: list[str], chunk_ids: list[str], source: str) -> int:
-    """Offline: LLM triple extraction + MERGE into Neo4j. Returns number of triples written."""
+def ingest_chunks_to_graph(chunks: list[str], chunk_ids: list[str], source: str) -> int:
+    """Offline: LLM triple extraction + merge into PostgreSQL graph. Returns number of triples written."""
     if not get_driver():
         return 0
     n = 0
@@ -231,7 +231,7 @@ def bm25_parent_documents(question: str, top_child: int = BM25_TOP_CHILD) -> tup
 def graph_context_documents(question: str) -> tuple[list[Document], list[str]]:
     logs: list[str] = []
     if not get_driver():
-        return [], ["Graph: Neo4j not connected."]
+        return [], ["Graph: backend not connected."]
     kws = extract_graph_keywords(question)
     if not kws:
         kws = _tokenize(question)[:6]
@@ -250,7 +250,7 @@ def graph_context_documents(question: str) -> tuple[list[Document], list[str]]:
 def global_context_documents(question: str) -> tuple[list[Document], list[str]]:
     logs: list[str] = []
     if not get_driver():
-        return [], ["Global: Neo4j not connected."]
+        return [], ["Global: graph backend not connected."]
     summary = global_graph_summary()
     if not summary:
         return [], ["Global: empty summary."]
@@ -345,10 +345,10 @@ def retrieve_hybrid_ranked_documents(question: str, top_n: int = 10) -> tuple[li
     meta["route"] = decision.route
     meta["router_reason"] = decision.reason
 
-    neo4j_ok = bool(get_driver())
+    graph_ok = bool(get_driver())
     effective_route = decision.route
-    if not neo4j_ok and effective_route in ("GRAPH", "GLOBAL", "HYBRID"):
-        meta["logs"].append("Neo4j unavailable; falling back to VECTOR-style retrieval.")
+    if not graph_ok and effective_route in ("GRAPH", "GLOBAL", "HYBRID"):
+        meta["logs"].append("Graph backend unavailable; falling back to VECTOR-style retrieval.")
         effective_route = "VECTOR"
     meta["effective_route"] = effective_route
 
@@ -383,10 +383,10 @@ def prepare_hybrid_chat(question: str) -> HybridPrepared | dict[str, Any]:
     decision = route_query(question)
     logs.append(f"Router: {decision.route} — {decision.reason}")
 
-    neo4j_ok = bool(get_driver())
+    graph_ok = bool(get_driver())
     effective_route = decision.route
-    if not neo4j_ok and effective_route in ("GRAPH", "GLOBAL", "HYBRID"):
-        logs.append("Neo4j unavailable; falling back to VECTOR-style retrieval.")
+    if not graph_ok and effective_route in ("GRAPH", "GLOBAL", "HYBRID"):
+        logs.append("Graph backend unavailable; falling back to VECTOR-style retrieval.")
         effective_route = "VECTOR"
 
     candidates, sub = gather_route_candidates(question, effective_route)

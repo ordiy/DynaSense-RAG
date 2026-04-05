@@ -1,6 +1,6 @@
 # MVP: Routing + Hybrid RAG (Dual Recall)
 
-This document implements the architecture described in **`readme-v2-1.md`** at **MVP** scope: a query router, dense + BM25 lexical retrieval, Neo4j graph recall with linearization, optional global graph summary, and a **unified cross-encoder rerank** (Top‑K) before the existing anti-hallucination grader + generator.
+This document implements the architecture described in **`readme-v2-1.md`** at **MVP** scope: a query router, dense + BM25 lexical retrieval, PostgreSQL-backed graph recall with linearization, optional global graph summary, and a **unified cross-encoder rerank** (Top‑K) before the existing anti-hallucination grader + generator.
 
 ---
 
@@ -13,16 +13,16 @@ This document implements the architecture described in **`readme-v2-1.md`** at *
    - `HYBRID` — needs both narrative evidence and structured relations.
 
 2. **Dual-engine indexing (offline)**
-   - **Vector**: unchanged LanceDB + Vertex embeddings (child chunks).
-   - **Graph**: LLM extracts `(subject, predicate, object)` triples per chunk + **`MERGE`** into Neo4j with **`chunk_id`** on the relationship for provenance.
+   - **Vector**: PostgreSQL `kb_embedding` + Vertex embeddings (child chunks).
+   - **Graph**: LLM extracts `(subject, predicate, object)` triples per chunk + merge into PostgreSQL (Apache AGE or relational `kg_triple`) with **`chunk_id`** provenance.
 
 3. **Online retrieval**
    - **VECTOR path**: dense retrieval (Small-to-Big parent expansion) + **BM25** over child chunks → parent expansion → **fusion rerank** (Top‑5 by default).
-   - **GRAPH path**: LLM extracts **keywords** from the question → Neo4j `MATCH` with `CONTAINS` on entity names / relation type → **linearized** triples as text context.
+   - **GRAPH path**: LLM extracts **keywords** from the question → bounded keyword match on entity names / relation type (SQL or AGE) → **linearized** triples as text context.
    - **GLOBAL path**: graph summary (entity/relationship counts + sample names) + **small dense anchor** (top‑2 parents) for grounding.
    - **HYBRID path**: union vector + graph candidates → **single rerank** pool.
 
-4. **Unified fusion & rerank** — Jina reranker scores all candidates (vector, BM25, graph) as plain text passages; **hard cut** to `HYBRID_FUSION_TOP_N` (default **5**).
+4. **Unified fusion & rerank** — Jina reranker scores all candidates (vector, BM25, graph) as plain text passages; **hard cut** to `HYBRID_FUSION_TOP_N` (default **5**). **Before** this step, optional **query anchor filtering** (`QUERY_ANCHOR_FILTER`, default on) can remove candidates that contain none of the detected anchors (e.g. institution names, A-share codes); see `src/core/query_anchors.py` (no matches → fail-open, keep the original list).
 
 5. **Downstream** — unchanged **grader** + **generator** (including analysis vs factual dual-track prompts).
 
@@ -32,9 +32,9 @@ This document implements the architecture described in **`readme-v2-1.md`** at *
 
 | Module | Responsibility |
 |--------|-------------------|
-| `src/graph_store.py` | Neo4j driver, constraints, `merge_triple`, `query_relationships_by_keywords`, `global_graph_summary`, `linearize_rows`. |
+| `src/graph_store.py` | PostgreSQL graph: `merge_triple`, `query_relationships_by_keywords`, `global_graph_summary`, `linearize_rows`. |
 | `src/hybrid_rag.py` | Router (`RouteDecision`), keyword extraction, triple extraction for ingest, BM25 pool, `collect_vector_path`, `run_hybrid_chat_pipeline`. |
-| `src/rag_core.py` | `retrieve_parent_documents_expanded` (shared dense path), `process_document_task` → calls `ingest_chunks_to_neo4j`, `run_chat_pipeline` → hybrid by default with env fallback. |
+| `src/rag_core.py` | `retrieve_parent_documents_expanded` (shared dense path), `process_document_task` → calls `ingest_chunks_to_graph`, `run_chat_pipeline` → hybrid by default with env fallback. |
 
 ---
 
@@ -42,9 +42,8 @@ This document implements the architecture described in **`readme-v2-1.md`** at *
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `NEO4J_URI` | `bolt://localhost:7687` | Bolt URL |
-| `NEO4J_USER` | `neo4j` | Username |
-| `NEO4J_PASSWORD` | `changeme` | Password (match `docker-compose.neo4j.yml`) |
+| `DATABASE_URL` | *(none)* | PostgreSQL URL (required for storage) |
+| `GRAPH_BACKEND` / `AGE_GRAPH_NAME` | see `src/core/config.py` | AGE vs relational `kg_triple` |
 | `HYBRID_RAG_ENABLED` | `true` | `false` → legacy LangGraph vector-only pipeline |
 | `HYBRID_FUSION_TOP_N` | `5` | Final rerank cut |
 | `HYBRID_BM25_TOP_CHILD` | `12` | BM25 child hits before parent expansion |
@@ -52,12 +51,11 @@ This document implements the architecture described in **`readme-v2-1.md`** at *
 
 ---
 
-## Local Neo4j (Docker)
+## Local PostgreSQL (Docker)
 
 ```bash
-docker compose -f docker-compose.neo4j.yml up -d
-# Browser: http://localhost:7474
-# Bolt: bolt://localhost:7687  user=neo4j pass=changeme
+docker compose -f docker-compose.postgres.yml up -d
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
 ```
 
 ---

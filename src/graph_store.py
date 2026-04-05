@@ -1,65 +1,41 @@
 """
-Neo4j graph layer for Hybrid RAG (MVP).
-
-Schema (simplified):
-  (:Entity {norm, name})     — normalized key for MERGE
-  (:Chunk {id, parent_id, source, preview})
-  (:Entity)-[:REL {type, chunk_id, source}]->(:Entity)
-
-Chunk nodes link extraction provenance; edges carry chunk_id for citation / traceability.
+Graph layer for Hybrid RAG (MVP): PostgreSQL (Apache AGE or relational ``kg_triple``).
 """
 from __future__ import annotations
 
 import logging
-import os
-import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "changeme")
-
-_driver = None
-_schema_ready = False
-
-
-def _norm_key(name: str) -> str:
-    s = name.strip().lower()
-    s = re.sub(r"\s+", " ", s)
-    return s[:512]
+# Truthy sentinel when graph persistence is PostgreSQL (``get_driver()`` is only used as boolean).
+_PG_GRAPH = object()
 
 
 def get_driver():
-    global _driver
-    if _driver is not None:
-        return _driver
-    try:
-        from neo4j import GraphDatabase
-    except ImportError:
-        logger.warning("neo4j package not installed; graph features disabled.")
+    """
+    Legacy name: callers only check truthiness.
+
+    Returns a sentinel when PostgreSQL graph storage is reachable.
+    """
+    from src.core.config import get_settings
+    from src.infrastructure.persistence.postgres_connection import get_pool
+    from src.infrastructure.persistence.postgres_graph import ping
+
+    s = get_settings()
+    if not s.database_url:
         return None
     try:
-        _driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        _driver.verify_connectivity()
-        logger.info("Neo4j connected: %s", NEO4J_URI)
+        if ping(get_pool()):
+            return _PG_GRAPH
     except Exception as e:
-        logger.warning("Neo4j unavailable (%s); graph features disabled.", e)
-        _driver = None
-    return _driver
+        logger.debug("PostgreSQL graph backend unavailable: %s", e)
+    return None
 
 
 def ensure_schema() -> None:
-    global _schema_ready
-    drv = get_driver()
-    if not drv or _schema_ready:
-        return
-    with drv.session() as session:
-        session.run(
-            "CREATE CONSTRAINT entity_norm IF NOT EXISTS FOR (e:Entity) REQUIRE e.norm IS UNIQUE"
-        )
-    _schema_ready = True
+    """DDL is owned by ``postgres_schema.ensure_schema``; no-op here."""
+    return
 
 
 def merge_triple(
@@ -70,91 +46,57 @@ def merge_triple(
     source: str,
 ) -> None:
     """MERGE two entities and a typed relationship with provenance."""
-    drv = get_driver()
-    if not drv:
+    from src.core.config import get_settings
+    from src.infrastructure.persistence.postgres_connection import get_pool
+    from src.infrastructure.persistence.postgres_age_setup import age_is_ready
+    from src.infrastructure.persistence.postgres_graph import merge_triple as _pg_merge
+
+    s = get_settings()
+    if not s.database_url:
         return
-    ensure_schema()
-    sn = _norm_key(subject)
-    on = _norm_key(obj)
-    if not sn or not on:
+    pool = get_pool()
+    if age_is_ready() and s.graph_backend == "age":
+        from src.infrastructure.persistence.postgres_age_graph import merge_triple_age
+
+        merge_triple_age(subject, predicate, obj, chunk_id, source, pool, s.age_graph_name)
         return
-    pred = (predicate or "RELATED_TO").strip()[:128] or "RELATED_TO"
-    with drv.session() as session:
-        session.run(
-            """
-            MERGE (a:Entity {norm: $sn})
-            ON CREATE SET a.name = $sname
-            MERGE (b:Entity {norm: $on})
-            ON CREATE SET b.name = $oname
-            MERGE (a)-[r:REL {type: $ptype, chunk_id: $cid}]->(b)
-            ON CREATE SET r.source = $src
-            SET r.source = $src
-            """,
-            sn=sn,
-            sname=subject.strip()[:512],
-            on=on,
-            oname=obj.strip()[:512],
-            cid=chunk_id,
-            src=source[:512],
-            ptype=pred,
-        )
+    _pg_merge(subject, predicate, obj, chunk_id, source, pool)
 
 
 def query_relationships_by_keywords(keywords: list[str], limit: int = 40) -> list[dict[str, Any]]:
     """Return relationship rows matching any keyword in entity names or relation type."""
-    drv = get_driver()
-    if not drv:
+    from src.core.config import get_settings
+    from src.infrastructure.persistence.postgres_connection import get_pool
+    from src.infrastructure.persistence.postgres_age_setup import age_is_ready
+    from src.infrastructure.persistence.postgres_graph import query_relationships_by_keywords as _pg_q
+
+    s = get_settings()
+    if not s.database_url:
         return []
-    ensure_schema()
-    kws = [k.strip() for k in keywords if k and len(k.strip()) > 1][:20]
-    if not kws:
-        return []
-    rows: list[dict[str, Any]] = []
-    with drv.session() as session:
-        result = session.run(
-            """
-            UNWIND $kws AS kw
-            MATCH (a:Entity)-[r:REL]->(b:Entity)
-            WHERE toLower(a.name) CONTAINS toLower(kw)
-               OR toLower(b.name) CONTAINS toLower(kw)
-               OR toLower(r.type) CONTAINS toLower(kw)
-            RETURN DISTINCT a.name AS an, r.type AS rt, b.name AS bn, r.chunk_id AS cid, r.source AS src
-            LIMIT $lim
-            """,
-            kws=kws,
-            lim=int(limit),
-        )
-        for rec in result:
-            rows.append(
-                {
-                    "subject": rec["an"],
-                    "predicate": rec["rt"],
-                    "object": rec["bn"],
-                    "chunk_id": rec["cid"],
-                    "source": rec["src"],
-                }
-            )
-    return rows
+    pool = get_pool()
+    if age_is_ready() and s.graph_backend == "age":
+        from src.infrastructure.persistence.postgres_age_graph import query_relationships_by_keywords_age
+
+        return query_relationships_by_keywords_age(keywords, limit, pool, s.age_graph_name)
+    return _pg_q(keywords, limit, pool)
 
 
 def global_graph_summary() -> str:
     """MVP 'community/global' signal: entity and relationship counts + sample entities."""
-    drv = get_driver()
-    if not drv:
+    from src.core.config import get_settings
+    from src.infrastructure.persistence.postgres_connection import get_pool
+    from src.infrastructure.persistence.postgres_age_setup import age_is_ready
+    from src.infrastructure.persistence.postgres_graph import global_graph_summary as _pg_g
+
+    s = get_settings()
+    if not s.database_url:
         return ""
-    ensure_schema()
-    with drv.session() as session:
-        n_ent = session.run("MATCH (e:Entity) RETURN count(e) AS c").single()["c"]
-        n_rel = session.run("MATCH ()-[r:REL]->() RETURN count(r) AS c").single()["c"]
-        names = session.run(
-            "MATCH (e:Entity) RETURN e.name AS n ORDER BY e.name LIMIT 30"
-        )
-        sample = [r["n"] for r in names if r["n"]]
-    lines = [
-        f"[Graph summary] Entities: {n_ent}, Relationships: {n_rel}.",
-        "Sample entity names: " + ", ".join(sample[:15]) + ("..." if len(sample) > 15 else ""),
-    ]
-    return "\n".join(lines)
+    pool = get_pool()
+    if age_is_ready() and s.graph_backend == "age":
+        from src.infrastructure.persistence.postgres_age_graph import global_graph_summary_age
+
+        return global_graph_summary_age(pool, s.age_graph_name)
+    return _pg_g(pool)
 
 
 def linearize_rows(rows: list[dict[str, Any]]) -> str:

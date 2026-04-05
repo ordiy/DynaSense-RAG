@@ -14,11 +14,11 @@ In enterprise environments (legal, financial, internal HR policies), LLM halluci
 
 Instead, this architecture achieves high precision through:
 1. **Intelligent Chunking** (Jina Segmenter)
-2. **High-Dimensional Vector Retrieval** (Google Vertex AI `text-embedding-004` + LanceDB)
+2. **High-Dimensional Vector Retrieval** (Google Vertex AI `text-embedding-004` + PostgreSQL pgvector)
 3. **Cross-Encoder Semantic Reranking** (Jina Multilingual Reranker)
 4. **Dual-Track Grader + Generator** (LangGraph state machine — strict for factual queries, analytically capable for reasoning queries)
 5. **Server-Side Multi-Turn Memory** (conversation session with context-length control)
-6. **Hybrid RAG (MVP)** — **Query Router** + **Dense + BM25** + **Neo4j graph recall** + unified **Top‑K rerank** before grading (see `docs/mvp_hybrid_rag.md`)
+6. **Hybrid RAG (MVP)** — **Query Router** + **Dense + BM25** + **PostgreSQL graph recall** + unified **Top‑K rerank** before grading (see `docs/mvp_hybrid_rag.md`)
 
 
 
@@ -36,11 +36,11 @@ Raw Documents (TXT/MD)
                                               │
                     ┌─────────────────────────┴──────────────────────────┐
                     ▼                                                    ▼
-         [ Document DB (MongoMock) ]                    [ Vertex AI Embeddings ]
+         [ Document store (PostgreSQL JSONB) ]          [ Vertex AI Embeddings ]
            Stores: full parent text                       text-embedding-004
            key: parent_id  ◄──── parent_id ────────────────────┤
                                                                ▼
-                                                    [ Vector DB (LanceDB) ]
+                                                    [ Vector DB (pgvector) ]
                                                       Stores: dense vectors
                                                       Metadata: parent_id
 
@@ -56,7 +56,7 @@ Raw Documents (TXT/MD)
       │                              _build_query_with_history()
       │                                         │
       ▼                                         ▼
-[ LanceDB Vector Search ]  ←──── enriched query (with history)
+[ pgvector similarity search ]  ←──── enriched query (with history)
    Top K=10 child chunks
       │
       ▼
@@ -163,8 +163,8 @@ Conversation sessions managed by `conversation_id` on the backend, with context-
 ### A/B Memory Strategy Comparison
 `POST /api/chat/session/ab` runs both `prioritized` and `legacy` memory modes in parallel for the same message, returning side-by-side query content, answers, and blocking status—enabling rapid diagnosis of memory strategy effects.
 
-### Hybrid RAG — Routing + Dual Recall + Neo4j (MVP)
-Implements **`readme-v2-1.md`**: an LLM **intent router** (`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`), **dual indexing** (LanceDB + Neo4j triples with `chunk_id` provenance), **online** dense + BM25 recall with **graph linearization**, and a **single Jina rerank** cut to Top‑5 before the existing grader/generator.
+### Hybrid RAG — Routing + Dual Recall + graph (MVP)
+Implements **`readme-v2-1.md`**: an LLM **intent router** (`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`), **unified indexing** in PostgreSQL (pgvector + JSONB + graph triples with `chunk_id` provenance), **online** dense + BM25 recall with **graph linearization**, and a **single Jina rerank** cut to Top‑5 before the existing grader/generator.
 
 ```text
 User Query
@@ -173,7 +173,7 @@ User Query
 [ Query Router (LLM) ] ──► VECTOR | GRAPH | GLOBAL | HYBRID
     │
     ├─ VECTOR ──► Dense(Small-to-Big) + BM25(child→parent) ──┐
-    ├─ GRAPH ───► Neo4j subgraph → linearized triples text ──┤──► [ Jina Rerank Top‑5 ]
+    ├─ GRAPH ───► Graph subgraph → linearized triples text ──┤──► [ Jina Rerank Top‑5 ]
     ├─ GLOBAL ──► Graph summary + small dense anchor ──────────┤
     └─ HYBRID ──► merge VECTOR + GRAPH candidates ───────────┘
                                         │
@@ -185,14 +185,14 @@ User Query
 flowchart TB
   subgraph ingest["Offline: dual-engine indexing"]
     D[Raw documents] --> J[Jina chunking]
-    J --> E[Vertex embeddings + LanceDB]
+    J --> E[Vertex embeddings + pgvector]
     J --> T[LLM triple extraction]
-    T --> N[(Neo4j + chunk_id provenance)]
+    T --> N[(PostgreSQL graph + chunk_id provenance)]
   end
   subgraph online["Online: router + unified rerank"]
     Q[User query] --> R[Query router]
     R --> V[VECTOR: dense + BM25]
-    R --> G[GRAPH: Neo4j + linearize]
+    R --> G[GRAPH: PG graph + linearize]
     R --> GL[GLOBAL: graph summary + dense anchor]
     R --> HY[HYBRID: merge candidates]
     V --> RR[Jina cross-encoder rerank Top-K]
@@ -203,7 +203,7 @@ flowchart TB
   end
 ```
 
-- **Local Neo4j**: `docker compose -f docker-compose.neo4j.yml up -d` (Bolt `7687`, default password `changeme`).
+- **PostgreSQL**: `docker compose -f docker-compose.postgres.yml up -d` and set `DATABASE_URL` (see compose file comments).
 - **Demo corpus**: upload `data/demo_related_party.txt`, then try *「中国中信银行的关联方有哪些？」* — expect `GRAPH` or `HYBRID` with graph-backed context in logs.
 - **Disable hybrid** (legacy vector-only LangGraph): `export HYBRID_RAG_ENABLED=false`.
 
@@ -215,10 +215,10 @@ Full design, env vars, and Q&A: [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.m
 * **Orchestration**: `LangGraph` & `LangChain`
 * **Embedding Model**: Google Vertex AI `text-embedding-004`
 * **LLM**: Google Vertex AI `gemini-2.5-pro`
-* **Vector Database**: `LanceDB`
+* **Database**: PostgreSQL (`pgvector` + JSONB + optional Apache AGE)
 * **Semantic Chunking**: `Jina Segmenter API`
 * **Reranker**: `jina-reranker-v2-base-multilingual`
-* **Graph DB (Hybrid MVP)**: Neo4j Community (local Docker) + `neo4j` Python driver
+* **Graph (Hybrid MVP)**: PostgreSQL (Apache AGE Cypher or relational `kg_triple` fallback)
 * **Lexical retrieval**: `rank-bm25` (BM25Okapi over child chunks)
 * **Session Store**: In-memory `dict` with TTL (upgradeable to Redis)
 
@@ -229,16 +229,18 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # 2. Install dependencies
-pip install langchain langchain-google-vertexai langgraph lancedb==0.5.2 pydantic bs4 pandas numpy jina requests mongomock datasets polars
+#    Full app (Vertex, LangChain, etc.): use project requirements or the line below.
+#    CI / unit tests only: `pip install -r requirements-ci.txt` (no Vertex stack).
+pip install -r requirements.txt
 
-# 3. Set your API Keys and GCP config
+# 3. Set your API Keys, GCP config, and PostgreSQL URL
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-sa.json"
 export JINA_API_KEY="your-jina-api-key"
 
-# 4. (Optional) Local Neo4j for Hybrid RAG
-docker compose -f docker-compose.neo4j.yml up -d
-export NEO4J_PASSWORD="changeme"   # must match compose file
+# 4. PostgreSQL + pgvector (required for storage)
+docker compose -f docker-compose.postgres.yml up -d
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
 
 # 5. Start the web server
 .venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
@@ -256,7 +258,13 @@ export NEO4J_PASSWORD="changeme"   # must match compose file
 |---|---|
 | [docs/langsmith_observability.md](./docs/langsmith_observability.md) | **LangSmith** — tracing env vars, init order (`src/observability.py`), [official observability docs](https://docs.langchain.com/langsmith/observability) |
 | [docs/langgraph_stream_log.md](./docs/langgraph_stream_log.md) | **LangGraph stream logs** — `LANGGRAPH_STREAM_LOG`, `stream_mode="values"` step logs in `invoke_rag_app` |
-| [docs/architecture.md](./docs/architecture.md) | **Clean Architecture** — `api/` / `core/` / `domain/` / `infrastructure/` layout and dependency rules |
+| [docs/architecture.md](./docs/architecture.md) | **Clean Architecture** — `api/` / `core/` / `domain/` / `infrastructure/` layout; **`POST /api/analytics/profile`** (controlled CSV/TSV/XLSX profiling, no arbitrary code) |
+| [docs/bitter_lesson_roadmap.md](./docs/bitter_lesson_roadmap.md) | **The Bitter Lesson** — phased roadmap (metrics, learn vs hand-rules, compliance boundaries) |
+| [docs/postgresql_storage_roadmap.md](./docs/postgresql_storage_roadmap.md) | **PostgreSQL + pgvector** — replace LanceDB / Neo4j / MongoMock for simpler GB-scale deployment |
+| [docs/TODO.md](./docs/TODO.md) | **Backlog** — OpenClaw vs RAG boundaries and follow-ups |
+| [docs/testing.md](./docs/testing.md) | **Testing** — pytest layers, `DATABASE_URL`, troubleshooting |
+| [docs/graph_constrained_queries.md](./docs/graph_constrained_queries.md) | **Constrained graph queries** — whitelist templates, debug APIs |
+| [docs/whatif_tools.md](./docs/whatif_tools.md) | **What-If tools** — `/api/whatif/loan/compare`, no-RAG DAG |
 | [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — router, dense+BM25, Neo4j, fusion rerank (`readme-v2-1.md`) |
 | [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — test cases, batch API, `scripts/run_recall_eval.py` |
 | [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ benchmark plan** — `scripts/benchmark_recall_ndcg.py`, reports `reports/recall_ndcg_benchmark_*.md` |

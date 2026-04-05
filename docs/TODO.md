@@ -24,6 +24,8 @@
 
 ## 本仓库 TODO（可勾选）
 
+- [x] 存储已收敛为 **PostgreSQL + pgvector**（见 `src/rag_core.py`、`docker-compose.postgres.yml`）；验证与命令见 [testing.md](./testing.md)。
+- [ ] 按 [bitter_lesson_roadmap.md](./bitter_lesson_roadmap.md) **阶段 A** 推进：评测资产、模型版本化、反馈落库规划、缓存策略（检索改进以指标驱动，而非堆砌规则）。
 - [ ] 在 `architecture.md` / README 中保持与本文 **职责边界** 一致，避免新同事把「通知/催办」误实现进 `rag_core`。
 - [ ] 若需给 OpenClaw **只读**能力：定义稳定 **内部 API**（例如：结构化问题 → 返回 **引用片段 + citations**，**不**自动触发通知）。
 - [ ] What-If 工具：按业务需要扩展 **新 scenario**（仍放在 `src/tools/` + `whatif_pipeline`），保持 **无 LLM / 可单测** 优先。

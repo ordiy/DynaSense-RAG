@@ -10,8 +10,10 @@ import os
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("CI") == "true" or not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
-    reason="Full stack: requires GOOGLE_APPLICATION_CREDENTIALS and Vertex (not in default CI).",
+    os.environ.get("CI") == "true"
+    or not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    or not os.environ.get("DATABASE_URL"),
+    reason="Full stack: requires GOOGLE_APPLICATION_CREDENTIALS, Vertex, and DATABASE_URL (PostgreSQL).",
 )
 
 
@@ -33,4 +35,4 @@ def test_openapi_and_pages_exist():
     assert "/api/whatif/loan/compare" in paths
     assert "/api/debug/graph/constrained/run" in paths
     assert "/api/debug/graph/constrained/suggest" in paths
-    assert "/api/debug/lancedb/summary" in paths
+    assert "/api/debug/pg/summary" in paths

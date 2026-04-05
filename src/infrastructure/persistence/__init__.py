@@ -1,3 +1,3 @@
-from src.infrastructure.persistence.neo4j_graph_repository import Neo4jGraphRepository
+from src.infrastructure.persistence.postgres_graph_repository import PostgresGraphRepository
 
-__all__ = ["Neo4jGraphRepository"]
+__all__ = ["PostgresGraphRepository"]

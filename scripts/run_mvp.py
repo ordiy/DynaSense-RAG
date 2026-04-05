@@ -1,12 +1,22 @@
 import os
+import sys
 import json
-import lancedb
+from pathlib import Path
 from typing import List, TypedDict
 from pydantic import BaseModel, Field
 
 from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
-from langchain_community.vectorstores import LanceDB
 from langchain_core.documents import Document
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+if not os.environ.get("DATABASE_URL"):
+    raise SystemExit("Set DATABASE_URL for PostgreSQL + pgvector.")
+
+from src.infrastructure.persistence.postgres_connection import init_pool, get_pool
+from src.infrastructure.persistence.postgres_schema import ensure_schema, truncate_kb_storage
+from src.infrastructure.persistence.postgres_vectorstore import PostgresVectorStore
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph, START
 
@@ -17,10 +27,11 @@ doc_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
 query_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
 llm = ChatVertexAI(model_name="gemini-2.5-pro", temperature=0)
 
-# 2. Database and Ingestion (LanceDB)
-print("Initializing LanceDB and ingesting data...")
-db = lancedb.connect("/tmp/lancedb_mvp")
-table_name = "doc_features"
+# 2. Database and Ingestion (PostgreSQL)
+print("Initializing PostgreSQL kb_embedding and ingesting data...")
+init_pool(os.environ["DATABASE_URL"])
+ensure_schema(get_pool())
+truncate_kb_storage(get_pool())
 
 # Generate a synthetic dataset for testing recall
 sample_docs = [
@@ -36,15 +47,12 @@ sample_docs = [
     Document(page_content="新员工入职培训：每月的第一个星期一为新员工统一入职培训日，涵盖公司文化和基础安全操作。", metadata={"id": 10})
 ]
 
-if table_name in db.table_names():
-    db.drop_table(table_name)
-
-vectorstore = LanceDB.from_documents(
-    documents=sample_docs,
-    embedding=doc_embeddings,
-    connection=db,
-    table_name=table_name
-)
+vs = PostgresVectorStore(get_pool(), doc_embeddings)
+texts = [d.page_content for d in sample_docs]
+embeds = doc_embeddings.embed_documents(texts)
+rows = [(str(d.metadata["id"]), d.page_content, dict(d.metadata), embeds[j]) for j, d in enumerate(sample_docs)]
+vs.add_embedding_rows(rows)
+vectorstore = vs
 
 retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
 

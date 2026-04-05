@@ -1,13 +1,23 @@
 import os
+import sys
 import json
 import requests
-import lancedb
+from pathlib import Path
 from typing import List, TypedDict
 from pydantic import BaseModel, Field
 
 from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
-from langchain_community.vectorstores import LanceDB
 from langchain_core.documents import Document
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+if not os.environ.get("DATABASE_URL"):
+    raise SystemExit("Set DATABASE_URL for PostgreSQL + pgvector.")
+
+from src.infrastructure.persistence.postgres_connection import init_pool, get_pool
+from src.infrastructure.persistence.postgres_schema import ensure_schema, truncate_kb_storage
+from src.infrastructure.persistence.postgres_vectorstore import PostgresVectorStore
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph, START
 
@@ -44,24 +54,18 @@ def chunk_text_jina(text: str) -> List[str]:
         print(f"Jina segmentation failed: {e}")
         return [text]
 
-# --- Reranking with Mongomock (Simulating minimongo) ---
-import mongomock
+# --- In-memory chunk index for mock rerank demo (production uses PostgreSQL kb_doc) ---
+_chunk_store: dict[int, dict] = {}
 
-mongo_client = mongomock.MongoClient()
-db_mongo = mongo_client.doc_db
-collection = db_mongo.chunks
 
 def index_chunks_to_mongo(docs: List[Document]):
-    collection.delete_many({})
-    records = []
+    _chunk_store.clear()
     for doc in docs:
-        records.append({
+        _chunk_store[int(doc.metadata["id"])] = {
             "id": doc.metadata["id"],
             "parent_id": doc.metadata["parent_id"],
             "content": doc.page_content,
-            # In a real scenario, you'd store dense/sparse vectors here too.
-        })
-    collection.insert_many(records)
+        }
 
 def mock_rerank_mongo(query: str, retrieved_docs: List[Document], top_n: int = 2) -> List[Document]:
     """
@@ -77,7 +81,7 @@ def mock_rerank_mongo(query: str, retrieved_docs: List[Document], top_n: int = 2
     
     for doc in retrieved_docs:
         # Fetch original chunk from mongo to prove integration
-        mongo_record = collection.find_one({"id": doc.metadata["id"]})
+        mongo_record = _chunk_store.get(int(doc.metadata["id"]))
         content = mongo_record["content"] if mongo_record else doc.page_content
         
         # Simple simulated score: overlap of chars/words
@@ -119,20 +123,21 @@ for doc in raw_docs:
 
 print(f"Original docs: {len(raw_docs)}, Total chunks after Jina: {len(chunked_documents)}")
 
-print("Indexing to MongoDB (for Rerank) and LanceDB (for Vector)...")
+print("Indexing chunk text (mock rerank store) and PostgreSQL kb_embedding (vectors)...")
 index_chunks_to_mongo(chunked_documents)
 
-db_lance = lancedb.connect("/tmp/lancedb_mvp_v2")
-table_name = "doc_chunks_v2"
-if table_name in db_lance.table_names():
-    db_lance.drop_table(table_name)
-
-vectorstore = LanceDB.from_documents(
-    documents=chunked_documents,
-    embedding=doc_embeddings,
-    connection=db_lance,
-    table_name=table_name
-)
+init_pool(os.environ["DATABASE_URL"])
+ensure_schema(get_pool())
+truncate_kb_storage(get_pool())
+vs = PostgresVectorStore(get_pool(), doc_embeddings)
+texts = [d.page_content for d in chunked_documents]
+embeds = doc_embeddings.embed_documents(texts)
+rows = [
+    (str(d.metadata["id"]), d.page_content, dict(d.metadata), embeds[j])
+    for j, d in enumerate(chunked_documents)
+]
+vs.add_embedding_rows(rows)
+vectorstore = vs
 
 # Fetch more initially for reranking
 retriever = vectorstore.as_retriever(search_kwargs={"k": 5})

@@ -7,12 +7,13 @@ Prerequisites:
   - JINA_API_KEY (reranker; degraded without it)
 
 Usage (from repo root):
-  LANCEDB_URI=./data/lancedb_recall_benchmark SKIP_NEO4J_INGEST=1 \\
+  DATABASE_URL=postgresql://... SKIP_GRAPH_INGEST=1 \\
     .venv/bin/python scripts/benchmark_recall_ndcg.py --num-docs 100 --num-queries 50
 
   # Hybrid retrieval path (router + fusion rerank top-10):
   .venv/bin/python scripts/benchmark_recall_ndcg.py --hybrid --num-docs 80 --num-queries 40
 
+Set ``DATABASE_URL`` before run; graph ingest is skipped when ``SKIP_GRAPH_INGEST=1``.
 Environment is applied inside main() before importing src.rag_core.
 """
 from __future__ import annotations
@@ -40,9 +41,9 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="Shuffle seed for query subsample")
     parser.add_argument("--hybrid", action="store_true", help="Use run_evaluation(use_hybrid=True)")
     parser.add_argument(
-        "--lancedb-uri",
-        default=str(ROOT / "data" / "lancedb_recall_benchmark"),
-        help="Isolated LanceDB directory (set LANCEDB_URI before import — this script sets it in main)",
+        "--database-url",
+        default=os.environ.get("DATABASE_URL", ""),
+        help="PostgreSQL URL (or set DATABASE_URL in the environment).",
     )
     parser.add_argument("--sleep", type=float, default=0.35, help="Seconds between API-heavy eval calls")
     parser.add_argument("--dry-run", action="store_true", help="Only write report skeleton + exit 0")
@@ -70,10 +71,12 @@ def main() -> int:
         print(f"Wrote {report_path}")
         return 0
 
-    # Critical: set paths before rag_core import
-    os.environ.setdefault("LANCEDB_URI", args.lancedb_uri)
-    os.makedirs(os.path.dirname(os.environ["LANCEDB_URI"]) or ".", exist_ok=True)
-    os.environ["SKIP_NEO4J_INGEST"] = "1"
+    if not (args.database_url or os.environ.get("DATABASE_URL")):
+        print("ERROR: DATABASE_URL is required (PostgreSQL + pgvector).")
+        return 2
+    if args.database_url:
+        os.environ["DATABASE_URL"] = args.database_url
+    os.environ.setdefault("SKIP_GRAPH_INGEST", "1")
 
     sys.path.insert(0, str(ROOT))
 
@@ -174,7 +177,7 @@ def main() -> int:
         notes=(
             "Ground truth: synthetic marker `[benchmark_doc_id=N]` appended to each support passage; "
             "Recall/NDCG use first hit in reranked top-10 contexts (see `docs/recall_evaluation.md`). "
-            "Neo4j ingest skipped (`SKIP_NEO4J_INGEST=1`). "
+            "Graph ingest skipped (`SKIP_GRAPH_INGEST=1`). "
             f"Raw JSON: `{json_path.name}`."
         ),
     )
@@ -217,8 +220,8 @@ def _report_markdown(
         "",
         "## 3. Environment",
         "",
-        "- `LANCEDB_URI`: isolated benchmark directory (default `./data/lancedb_recall_benchmark`)",
-        "- `SKIP_NEO4J_INGEST=1`: skip graph extraction during ingest",
+        "- `DATABASE_URL`: PostgreSQL connection string (required)",
+        "- `SKIP_GRAPH_INGEST=1`: skip graph extraction during ingest (default in this script)",
         "- Vertex AI embeddings + Jina reranker (if `JINA_API_KEY` set)",
         "",
         "## 4. Aggregated results",

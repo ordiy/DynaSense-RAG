@@ -1,129 +1,161 @@
 """
-Read-only helpers for LanceDB / Neo4j inspection (debug UI).
+Read-only helpers for PostgreSQL inspection (debug UI).
 
 Design: no arbitrary Cypher; bounded limits; separate from rag_core to avoid
 pulling LLM/vector logic into data browsing.
 """
 from __future__ import annotations
 
-import os
 from typing import Any
 
-import lancedb
-
-# Keep in sync with rag_core defaults
-LANCEDB_URI = os.environ.get("LANCEDB_URI", "./data/lancedb_store")
-TABLE_NAME = os.environ.get("LANCEDB_TABLE", "knowledge_base")
-
 MAX_ROWS_PAGE = 80
-MAX_SCAN_ROWS = 2000  # cap pandas materialization for safety
+MAX_SCAN_ROWS = 2000  # cap SQL result size for safety
 
 
-def lancedb_summary() -> dict[str, Any]:
-    """Table names and row counts for the configured LanceDB path."""
-    os.makedirs(os.path.dirname(LANCEDB_URI) or ".", exist_ok=True)
-    db = lancedb.connect(LANCEDB_URI)
-    tables: list[dict[str, Any]] = []
-    for name in sorted(db.table_names()):
+def postgres_storage_summary() -> dict[str, Any]:
+    """
+    Row counts for unified PostgreSQL storage (parents, children, vectors, triples).
+
+    Returns a small dict suitable for ``GET /api/debug/pg/summary`` when the pool
+    is initialized (typically after ``rag_core`` import).
+    """
+    from src.core.config import get_settings
+
+    s = get_settings()
+    if not s.database_url:
+        return {"backend": "no_database_url", "hint": "Set DATABASE_URL."}
+    try:
+        from src.infrastructure.persistence.postgres_connection import get_pool
+    except Exception as e:
+        return {"backend": "postgresql", "error": f"pool: {e}"}
+    try:
+        pool = get_pool()
+    except Exception as e:
+        return {"backend": "postgresql", "error": str(e)}
+    with pool.connection() as conn:
+        np = conn.execute(
+            "SELECT COUNT(*) FROM kb_doc WHERE doc->>'type' = 'parent'"
+        ).fetchone()[0]
+        nc = conn.execute(
+            "SELECT COUNT(*) FROM kb_doc WHERE doc->>'type' = 'child'"
+        ).fetchone()[0]
+        ne = conn.execute("SELECT COUNT(*) FROM kb_embedding").fetchone()[0]
         try:
-            t = db.open_table(name)
-            n = int(t.count_rows())
-        except Exception as e:
-            n = None
-            err = str(e)
-        else:
-            err = None
-        tables.append({"name": name, "row_count": n, "error": err})
-    return {"lancedb_uri": LANCEDB_URI, "tables": tables}
-
-
-def _metadata_dict(m: Any) -> dict[str, Any]:
-    if m is None:
-        return {}
-    if isinstance(m, dict):
-        return dict(m)
-    if hasattr(m, "as_py"):
-        try:
-            v = m.as_py()
-            return dict(v) if isinstance(v, dict) else {"value": str(v)}
+            nt = conn.execute("SELECT COUNT(*) FROM kg_triple").fetchone()[0]
         except Exception:
-            return {"value": str(m)}
-    return {"value": str(m)}
+            nt = None
+    out = {
+        "backend": "postgresql",
+        "kb_doc_parent_rows": int(np),
+        "kb_doc_child_rows": int(nc),
+        "kb_embedding_rows": int(ne),
+        "kg_triple_rows": nt,
+    }
+    try:
+        from src.infrastructure.persistence.postgres_age_setup import age_is_ready
+        from src.core.config import get_settings as _gs
+
+        gs = _gs()
+        out["apache_age_ready"] = bool(age_is_ready())
+        out["age_graph_name"] = gs.age_graph_name if age_is_ready() else None
+    except Exception:
+        pass
+    return out
 
 
-def lancedb_rows(
-    table_name: str | None,
+def kb_embedding_summary() -> dict[str, Any]:
+    """Row count for ``kb_embedding`` (pgvector)."""
+    from src.core.config import get_settings
+
+    s = get_settings()
+    if not s.database_url:
+        return {"error": "DATABASE_URL not set", "row_count": None}
+    try:
+        from src.infrastructure.persistence.postgres_connection import get_pool
+
+        pool = get_pool()
+        with pool.connection() as conn:
+            n = conn.execute("SELECT COUNT(*) FROM kb_embedding").fetchone()[0]
+        return {"table": "kb_embedding", "row_count": int(n)}
+    except Exception as e:
+        return {"error": str(e), "row_count": None}
+
+
+def kb_embedding_rows(
     limit: int,
     offset: int,
     source_substring: str | None,
     parent_id_substring: str | None,
 ) -> dict[str, Any]:
-    """
-    Return a page of rows with text preview and metadata (JSON-serializable).
-    Filters are simple substring matches on metadata fields.
-    """
-    name = table_name or TABLE_NAME
+    """Paginated rows from ``kb_embedding`` with optional JSONB ``meta`` filters."""
+    from src.core.config import get_settings
+
+    s = get_settings()
+    if not s.database_url:
+        return {"error": "DATABASE_URL not set", "rows": [], "total_after_filter": 0}
+
     limit = max(1, min(int(limit), MAX_ROWS_PAGE))
     offset = max(0, int(offset))
-
-    db = lancedb.connect(LANCEDB_URI)
-    if name not in db.table_names():
-        return {"error": f"Table not found: {name}", "rows": [], "total_after_filter": 0}
-
-    tbl = db.open_table(name)
-    df = tbl.to_pandas()
-    if len(df) > MAX_SCAN_ROWS:
-        df = df.head(MAX_SCAN_ROWS)
-
     src_q = (source_substring or "").strip().lower()
     pid_q = (parent_id_substring or "").strip().lower()
 
-    if src_q and "metadata" in df.columns:
-        def _src_match(m):
-            md = _metadata_dict(m)
-            s = str(md.get("source", "")).lower()
-            return src_q in s
+    from src.infrastructure.persistence.postgres_connection import get_pool
 
-        df = df[df["metadata"].apply(_src_match)]
+    pool = get_pool()
+    where_parts: list[str] = []
+    params: list[Any] = []
+    if src_q:
+        where_parts.append("LOWER(meta->>'source') LIKE %s")
+        params.append(f"%{src_q}%")
+    if pid_q:
+        where_parts.append("LOWER(meta->>'parent_id') LIKE %s")
+        params.append(f"%{pid_q}%")
+    where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    count_sql = f"SELECT COUNT(*) FROM kb_embedding{where_sql}"
+    page_sql = f"""
+            SELECT id, content, meta
+            FROM kb_embedding
+            {where_sql}
+            ORDER BY id
+            LIMIT %s OFFSET %s
+            """
 
-    if pid_q and "metadata" in df.columns:
-        def _pid_match(m):
-            md = _metadata_dict(m)
-            p = str(md.get("parent_id", "")).lower()
-            return pid_q in p
-
-        df = df[df["metadata"].apply(_pid_match)]
-
-    total = len(df)
-    page = df.iloc[offset : offset + limit]
+    with pool.connection() as conn:
+        if params:
+            total = int(conn.execute(count_sql, params).fetchone()[0])
+            rows = conn.execute(page_sql, (*params, limit, offset)).fetchall()
+        else:
+            total = int(conn.execute(count_sql).fetchone()[0])
+            rows = conn.execute(page_sql, (limit, offset)).fetchall()
+        capped = min(total, MAX_SCAN_ROWS)
 
     rows_out: list[dict[str, Any]] = []
-    for _, row in page.iterrows():
-        text = str(row.get("text", "") or "")
+    for rid, content, meta in rows:
+        text = str(content or "")
         preview = text[:500] + ("…" if len(text) > 500 else "")
-        md = _metadata_dict(row.get("metadata"))
-        vec = row.get("vector")
+        md = dict(meta) if isinstance(meta, dict) else {}
         rows_out.append(
             {
+                "id": rid,
                 "text_preview": preview,
                 "text_len": len(text),
                 "metadata": md,
-                "has_vector": vec is not None,
-                "vector_dim": len(vec) if hasattr(vec, "__len__") and vec is not None else None,
+                "has_vector": True,
             }
         )
 
     return {
-        "table": name,
+        "table": "kb_embedding",
         "total_after_filter": total,
         "limit": limit,
         "offset": offset,
         "rows": rows_out,
-        "truncated_scan": tbl.count_rows() > MAX_SCAN_ROWS,
+        "truncated_scan": total > MAX_SCAN_ROWS,
+        "capped_rows": capped,
     }
 
 
-def neo4j_summary_text() -> tuple[str | None, str | None]:
+def graph_summary_text() -> tuple[str | None, str | None]:
     """Returns (summary_text, error_message)."""
     try:
         from src.graph_store import global_graph_summary, get_driver
@@ -131,26 +163,26 @@ def neo4j_summary_text() -> tuple[str | None, str | None]:
         return None, f"Import error: {e}"
 
     if not get_driver():
-        return None, "Neo4j driver not available (check NEO4J_URI / password or service)."
+        return None, "Graph backend not available (set DATABASE_URL and ensure PostgreSQL is up)."
     text = global_graph_summary()
     if not text.strip():
         return None, "Empty summary (no data or connection issue)."
     return text, None
 
 
-def neo4j_keyword_search(keywords: list[str], limit: int) -> tuple[list[dict[str, Any]], str | None]:
+def graph_keyword_search(keywords: list[str], limit: int) -> tuple[list[dict[str, Any]], str | None]:
     try:
         from src.graph_store import get_driver, query_relationships_by_keywords
     except Exception as e:
         return [], f"Import error: {e}"
 
-    if not get_driver():
-        return [], "Neo4j driver not available."
-
     lim = max(1, min(int(limit), 100))
     kws = [k.strip() for k in keywords if k and k.strip()][:20]
     if not kws:
         return [], "Provide at least one keyword (length > 1)."
+
+    if not get_driver():
+        return [], "Graph backend not available."
 
     rows = query_relationships_by_keywords(kws, limit=lim)
     return rows, None

@@ -1,5 +1,8 @@
 """
-RAG core: LangGraph pipeline, embeddings, LanceDB.
+RAG core: LangGraph pipeline, embeddings, and vector storage.
+
+Vector + parent/child text live in **PostgreSQL** (JSONB ``kb_doc`` + pgvector ``kb_embedding``).
+See ``docs/postgresql_storage_roadmap.md``.
 
 LangSmith: call ``src.observability.init_langsmith_tracing()`` before this module
 is imported (``app.py`` does this for the API server). Standalone scripts should
@@ -10,16 +13,16 @@ import json
 import time
 import uuid
 import requests
-import lancedb
-import mongomock
 from typing import Any, Dict, Iterator, List, Tuple, TypedDict
 from pydantic import BaseModel, Field
 
 from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
-from langchain_community.vectorstores import LanceDB
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, StateGraph, START
+
+from src.core.config import get_settings
+from src.core.rag_context_format import format_numbered_passages
 
 import logging
 
@@ -29,30 +32,49 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
-LANCEDB_URI = os.environ.get("LANCEDB_URI", "./data/lancedb_store")
-TABLE_NAME = "knowledge_base"
 
 # Jina 外部调用：超时/重试，避免 worker 长时间阻塞
 JINA_REQUEST_TIMEOUT = (5, 20)  # (connect_timeout, read_timeout)
 JINA_MAX_RETRIES = 3
 
-# --- Initialization ---
-os.makedirs(os.path.dirname(LANCEDB_URI), exist_ok=True)
+# --- Embeddings / LLM (shared by all storage backends) ---
 doc_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
 query_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
 llm = ChatVertexAI(model_name="gemini-2.5-flash", temperature=0)
 
-# MongoDB Mock setup
-mongo_client = mongomock.MongoClient()
-db_mongo = mongo_client.doc_db
-collection = db_mongo.chunks
+# Populated by ``_setup_storage()`` — PostgreSQL only.
+collection = None  # PostgresJsonbDocCollection (JSONB ``kb_doc``)
+vectorstore = None  # PostgresVectorStore
 
-# LanceDB setup
-db_lance = lancedb.connect(LANCEDB_URI)
-try:
-    vectorstore = LanceDB(connection=db_lance, table_name=TABLE_NAME, embedding=doc_embeddings)
-except:
-    vectorstore = None # Will be created on first insertion
+
+def _init_postgres_storage() -> None:
+    """PostgreSQL: pgvector rows + JSONB parent/child docs for BM25 / small-to-big."""
+    global collection, vectorstore
+    from src.infrastructure.persistence.postgres_jsonb_collection import PostgresJsonbDocCollection
+    from src.infrastructure.persistence.postgres_connection import get_pool, init_pool
+    from src.infrastructure.persistence.postgres_schema import ensure_schema as pg_ensure_schema
+    from src.infrastructure.persistence.postgres_vectorstore import PostgresVectorStore
+
+    s = get_settings()
+    url = s.database_url
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL is required (PostgreSQL + pgvector). "
+            "Example: postgresql://user:pass@localhost:5432/map_rag"
+        )
+    init_pool(url)
+    pg_ensure_schema(get_pool())
+    collection = PostgresJsonbDocCollection(get_pool())
+    vectorstore = PostgresVectorStore(get_pool(), doc_embeddings)
+
+
+def _setup_storage() -> None:
+    """Initialize unified PostgreSQL storage."""
+    _init_postgres_storage()
+    logger.info("RAG storage: PostgreSQL + pgvector (unified).")
+
+
+_setup_storage()
 
 _http_session = requests.Session()
 if not JINA_API_KEY:
@@ -163,41 +185,30 @@ def process_document_task(content: str, filename: str, task_state: dict):
         collection.insert_many(mongo_records)
     
     task_state["progress"] = 70
-    
-    # Insert to LanceDB
+
+    # Vector index: PostgreSQL ``kb_embedding`` (same embedding model as Vertex).
     if docs_to_insert:
-        # We manually embed to avoid Langchain LanceDB wrapper bugs when appending
         texts = [d.page_content for d in docs_to_insert]
         embeds = doc_embeddings.embed_documents(texts)
-        data = []
-        for j, d in enumerate(docs_to_insert):
-            data.append({
-                "vector": embeds[j], 
-                "text": d.page_content, 
-                "metadata": d.metadata
-            })
-            
-        if TABLE_NAME in db_lance.table_names():
-            tbl = db_lance.open_table(TABLE_NAME)
-            tbl.add(data)
-            if vectorstore is None:
-                vectorstore = LanceDB(connection=db_lance, table_name=TABLE_NAME, embedding=doc_embeddings)
-        else:
-            tbl = db_lance.create_table(TABLE_NAME, data=data)
-            vectorstore = LanceDB(connection=db_lance, table_name=TABLE_NAME, embedding=doc_embeddings)
+        rows_pg = [
+            (d.metadata["doc_id"], d.page_content, dict(d.metadata), embeds[j])
+            for j, d in enumerate(docs_to_insert)
+        ]
+        assert vectorstore is not None
+        vectorstore.add_embedding_rows(rows_pg)
 
-    # Neo4j: LLM triple extraction + merge (MVP; optional if DB down / benchmark skip)
-    if os.environ.get("SKIP_NEO4J_INGEST", "").lower() in ("1", "true", "yes"):
+    # Graph: LLM triple extraction + merge (optional; skip for benchmarks)
+    if os.environ.get("SKIP_GRAPH_INGEST", "").lower() in ("1", "true", "yes"):
         pass
     else:
         try:
-            from src.hybrid_rag import ingest_chunks_to_neo4j
+            from src.hybrid_rag import ingest_chunks_to_graph
 
             chunk_ids = [f"chunk_{parent_id}_{i}" for i in range(len(chunks))]
-            n_triples = ingest_chunks_to_neo4j(chunks, chunk_ids, filename)
+            n_triples = ingest_chunks_to_graph(chunks, chunk_ids, filename)
             task_state["graph_triples_ingested"] = n_triples
         except Exception as e:
-            logger.warning("Neo4j graph ingest skipped: %s", e)
+            logger.warning("Graph ingest skipped: %s", e)
 
     task_state["status"] = "completed"
     task_state["progress"] = 100
@@ -217,23 +228,31 @@ class GradeDocuments(BaseModel):
 grader_llm = llm.with_structured_output(GradeDocuments)
 
 GRADE_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", "作为一个严谨的文档审核员，你需要判断以下【所有提供的内容段落】加在一起，是否包含了解答问题的关键事实依据？如果有哪怕一段相关，请回答 'yes'；如果全都是无关的废话，请坚决回答 'no'。"),
-    ("human", "问题: {question}\n\n合并的上下文段落:\n{documents}")
+    (
+        "system",
+        "作为一个严谨的文档审核员，用户问题下方会给出若干段 **按编号排列的检索结果**（[Passage 1]、[Passage 2]…）。"
+        "你需要通读每一段，判断这些段落 **合起来** 是否包含解答问题所需的关键事实依据。"
+        "交叉编码器重排后，排名靠后的段落仍可能包含互补信息，请不要只根据第一段下结论。"
+        "只要有任一段落与问题实质相关，请回答 'yes'；若全部与问题无关，请回答 'no'。",
+    ),
+    ("human", "问题: {question}\n\n编号检索段落:\n{documents}"),
 ])
 
 GEN_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
-        "Using the information contained in the context, give a comprehensive answer to the question. "
-        "Respond only to the question asked; the response should be concise and relevant to the question. "
-        "Provide the number of the source document when relevant. "
-        "If the answer cannot be deduced from the context, do not give an answer.",
+        "You are given a question and multiple numbered passages (cross-encoder reranked). "
+        "Integrate evidence from every passage that materially helps answer the question; "
+        "do not default to only the first passage unless later passages add nothing. "
+        "When multiple passages support different aspects, synthesize them. "
+        "If passages conflict, state the uncertainty and which passage(s) support each view. "
+        "Respond only to the question; be concise. Reference passage numbers when citing (e.g. Passage 2). "
+        "If the answer cannot be deduced from the passages, do not answer.",
     ),
     (
         "human",
-        "Context:\n{context}\n"
+        "Context (numbered passages):\n{context}\n"
         "---\n"
-        "Now here is the question you need to answer.\n\n"
         "Question: {question}",
     ),
 ])
@@ -241,12 +260,13 @@ GEN_PROMPT = ChatPromptTemplate.from_messages([
 # 分析推理型问题使用宽松生成 Prompt：允许在文档事实基础上做专业推理
 GEN_ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
-        "你是一位严谨的专业分析师。请基于【知识库事实】，结合专业领域知识对问题进行深入分析。\n\n"
+        "你是一位严谨的专业分析师。下面是以 [Passage 1]…[Passage N] 编号的检索结果（已重排）；"
+        "请综合 **所有与主题相关的段落**，不要只使用最靠前的一段，除非其余段落确实无关。"
         "知识库事实（检索到的上下文）:\n{context}\n\n"
         "回答规范：\n"
-        "1. 先陈述上下文中与问题直接相关的事实（标注为【文档事实】）\n"
+        "1. 先分点陈述各编号段落中与问题相关的事实（标注为【文档事实】，可引用 Passage 编号）\n"
         "2. 再基于这些事实运用专业知识进行分析推理（标注为【分析推理】）\n"
-        "3. 分析推理部分可运用行业知识，但不得凭空捏造上下文中不存在的具体数字或人名"
+        "3. 分析推理可运用行业知识，但不得凭空捏造上下文中不存在的具体数字或人名；若段落冲突，说明分歧与依据"
     )),
     ("human", "问题: {question}")
 ])
@@ -254,12 +274,13 @@ GEN_ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
 # 分析型查询对应的宽松 grader prompt：只判断上下文是否含有主题相关事实
 GRADE_ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
-        "你是一位文档相关性评估员。判断以下【上下文段落】是否包含与问题主题相关的背景事实，"
-        "这些事实可作为进一步分析推理的基础。\n"
-        "注意：不需要上下文直接回答问题，只需判断是否有该主题的相关背景信息。\n"
-        "如果有任何主题相关事实，回答 'yes'；如果完全不相关，回答 'no'。"
+        "你是一位文档相关性评估员。下方为按编号排列的检索段落（[Passage 1]…）。"
+        "请通读各段，判断整体上是否包含与问题主题相关的背景事实（可作分析推理的基础）。"
+        "排名靠后的段落也可能含有关键补充信息，请一并考虑。\n"
+        "不需要上下文直接回答问题，只需判断是否存在主题相关背景。\n"
+        "若有任何相关事实，回答 'yes'；若全部与主题无关，回答 'no'。"
     )),
-    ("human", "问题: {question}\n\n上下文段落:\n{documents}")
+    ("human", "问题: {question}\n\n编号上下文段落:\n{documents}")
 ])
 
 _ANALYSIS_INTENT_KEYWORDS = frozenset([
@@ -347,6 +368,8 @@ def retrieve_and_rerank_node(state: AgentState):
     if not vectorstore:
         return {"documents": [], "logs": logs}
 
+    top_n = get_settings().rag_vector_rerank_top_n
+
     expanded_docs, sublogs = retrieve_parent_documents_expanded(state["question"], dense_k=10)
     logs.extend(sublogs)
 
@@ -355,8 +378,10 @@ def retrieve_and_rerank_node(state: AgentState):
     expanded_docs, alogs = filter_documents_by_query_anchors(state["question"], expanded_docs)
     logs.extend(alogs)
 
-    logs.append(f"Executing Jina Cross-Encoder Rerank (Top 3) on {len(expanded_docs)} Parent Documents")
-    reranked_docs = jina_rerank(state["question"], expanded_docs, top_n=3)
+    logs.append(
+        f"Executing Jina Cross-Encoder Rerank (top_n={top_n}) on {len(expanded_docs)} parent documents"
+    )
+    reranked_docs = jina_rerank(state["question"], expanded_docs, top_n=top_n)
 
     return {"documents": [doc.page_content for doc in reranked_docs], "logs": logs}
 
@@ -369,7 +394,7 @@ def grade_documents_node(state: AgentState):
 
     question = state.get("question", "")
     is_analysis = _is_analysis_query(question)
-    combined_docs = "\n---\n".join(state["documents"])
+    combined_docs = format_numbered_passages(state["documents"])
 
     # 分析型查询使用宽松 grader，只判断是否有相关背景事实
     grade_prompt = GRADE_ANALYSIS_PROMPT if is_analysis else GRADE_PROMPT
@@ -414,8 +439,9 @@ def generate_node(state: AgentState):
         prompt = GEN_PROMPT
 
     logs.append("Generating answer based on verified context...")
+    ctx = format_numbered_passages(state["documents"])
     generation = llm.invoke(prompt.format_messages(
-        context="\n".join(state["documents"]),
+        context=ctx,
         question=question
     )).content
     return {"generation": generation, "logs": logs}
@@ -430,8 +456,8 @@ def stream_generation_chunks(question: str, document_strings: List[str]) -> Iter
     if not document_strings:
         yield "抱歉，知识库中未能找到与您问题高度相关的信息，为避免产生误导（幻觉），系统已阻断回答。"
         return
-    # Match ``generate_node`` context join so streaming and non-stream outputs align.
-    context = "\n".join(document_strings)
+    # Match ``generate_node`` formatting so streaming and non-stream outputs align.
+    context = format_numbered_passages(document_strings)
     if _is_analysis_query(question):
         msgs = GEN_ANALYSIS_PROMPT.format_messages(context=context, question=question)
     else:
@@ -540,7 +566,7 @@ def invoke_rag_app(inputs: AgentState) -> AgentState:
 
 def run_chat_pipeline(query: str):
     """
-    Default: Hybrid RAG (router + dense/BM25 + Neo4j + fusion rerank) when HYBRID_RAG_ENABLED=true.
+    Default: Hybrid RAG (router + dense/BM25 + graph + fusion rerank) when HYBRID_RAG_ENABLED=true.
     Fallback: original LangGraph vector-only pipeline on failure or HYBRID_RAG_ENABLED=false.
     """
     from src.core.citations import build_citations_from_context
@@ -566,20 +592,22 @@ def run_chat_pipeline(query: str):
 
 def reset_knowledge_base() -> None:
     """
-    Clear MongoMock child/parent records and drop the LanceDB table; reset vectorstore handle.
-    Intended for benchmarks / isolated tests. Set LANCEDB_URI before importing rag_core for a fresh path.
+    Clear all indexed documents (PostgreSQL TRUNCATE via ``collection.delete_many``).
+
+    Intended for benchmarks / isolated tests. Requires ``DATABASE_URL``.
     """
     global vectorstore
-    vectorstore = None
     try:
         collection.delete_many({})
     except Exception as e:
-        logger.warning("reset_knowledge_base: mongo clear failed: %s", e)
+        logger.warning("reset_knowledge_base: truncate failed: %s", e)
     try:
-        if TABLE_NAME in db_lance.table_names():
-            db_lance.drop_table(TABLE_NAME)
+        from src.infrastructure.persistence.postgres_vectorstore import PostgresVectorStore
+        from src.infrastructure.persistence.postgres_connection import get_pool
+
+        vectorstore = PostgresVectorStore(get_pool(), doc_embeddings)
     except Exception as e:
-        logger.warning("reset_knowledge_base: lance drop failed: %s", e)
+        logger.warning("reset_knowledge_base: vectorstore refresh failed: %s", e)
 
 
 # --- Evaluation Logic ---

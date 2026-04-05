@@ -1,1 +1,1 @@
-"""Infrastructure: concrete adapters (LanceDB, Neo4j, HTTP clients)."""
+"""Infrastructure: concrete adapters (PostgreSQL, HTTP clients)."""

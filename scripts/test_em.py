@@ -1,14 +1,26 @@
-import lancedb
-from langchain_community.vectorstores import LanceDB
+"""Quick embedding + similarity smoke test against PostgreSQL kb_embedding."""
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+if not os.environ.get("DATABASE_URL"):
+    raise SystemExit("Set DATABASE_URL (PostgreSQL + pgvector).")
+
 from langchain_google_vertexai import VertexAIEmbeddings
 
-doc_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
-q = "What type of organism is commonly used in preparation of foods such as cheese and yogurt?"
-vec = doc_embeddings.embed_query(q)
-db_lance = lancedb.connect("/tmp/lancedb_benchmark")
-vectorstore = LanceDB(connection=db_lance, embedding=doc_embeddings, table_name="benchmark_docs")
+from src.infrastructure.persistence.postgres_connection import init_pool, get_pool
+from src.infrastructure.persistence.postgres_schema import ensure_schema
+from src.infrastructure.persistence.postgres_vectorstore import PostgresVectorStore
 
-# Get raw query results without retriever
-res = vectorstore.similarity_search_with_score(q, k=5)
-for doc, score in res:
-    print(doc.metadata.get('doc_id'), score)
+doc_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
+init_pool(os.environ["DATABASE_URL"])
+ensure_schema(get_pool())
+vectorstore = PostgresVectorStore(get_pool(), doc_embeddings)
+
+q = "What type of organism is commonly used in preparation of foods such as cheese and yogurt?"
+docs = vectorstore.similarity_search(q, k=5)
+for doc in docs:
+    print(doc.metadata.get("doc_id"), doc.page_content[:80])

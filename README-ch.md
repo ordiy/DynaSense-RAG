@@ -229,16 +229,16 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # 2. 安裝相依套件
-pip install langchain langchain-google-vertexai langgraph lancedb==0.5.2 pydantic bs4 pandas numpy jina requests mongomock datasets polars
+pip install -r requirements.txt
 
-# 3. 設定 API 金鑰與 GCP
+# 3. 設定 API 金鑰、GCP 與 PostgreSQL
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-sa.json"
 export JINA_API_KEY="your-jina-api-key"
 
-# 4.（選用）本機 Neo4j，供 Hybrid RAG 使用
-docker compose -f docker-compose.neo4j.yml up -d
-export NEO4J_PASSWORD="changeme"   # 須與 compose 一致
+# 4. PostgreSQL + pgvector（儲存必需）
+docker compose -f docker-compose.postgres.yml up -d
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
 
 # 5. 啟動 Web 服務
 .venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000

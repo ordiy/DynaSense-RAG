@@ -2,7 +2,7 @@
 Extract plain text from PDF bytes for ingestion.
 
 Design: keep PDF parsing isolated from FastAPI and rag_core so the pipeline always
-receives UTF-8 text — the same path as TXT/MD for chunking, embeddings, and Neo4j.
+receives UTF-8 text — the same path as TXT/MD for chunking, embeddings, and graph ingest.
 """
 from __future__ import annotations
 
