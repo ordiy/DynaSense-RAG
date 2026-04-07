@@ -217,6 +217,26 @@ flowchart TB
 
 Full design, env vars, and Q&A: [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md).
 
+### Why Not ReAct Agentic Retrieval (for now)
+
+We evaluated the [NVIDIA NeMo Agentic Retrieval](https://huggingface.co/blog/nvidia/nemo-retriever-agentic-retrieval) pattern (ReAct loop with iterative `retrieve → observe → rethink` tool calls) against the current Hybrid RAG pipeline. The approach shows real NDCG@10 gains on [ViDoRe v3](https://huggingface.co/spaces/vidore/vidore-leaderboard?tab=vidore-v3-pipeline) — particularly on multi-hop and open-ended queries — but the cost profile is not yet viable for a real-time chat interface:
+
+| | Current Hybrid RAG | ReAct Agentic (Opus 4.5) |
+|---|---|---|
+| **Latency / query** | ~2–4 s | ~136 s |
+| **Input tokens / query** | ~4k–12k | ~760k |
+| **Retrieval passes** | 1 (multi-source, single shot) | 9.2 average |
+| **NDCG@10 (ViDoRe v3)** | comparable to dense baseline ~65 | **69.22** (+3.6 pts) |
+| **Cold-start / new domains** | requires routing heuristics | adapts via reasoning |
+| **Operational complexity** | moderate (BM25 cache, graph) | simple (tools only) |
+
+**Where the gap shows up most:** open-ended synthesis queries (0.438 vs higher with agent) and multi-hop queries (0.515 baseline). For extractive/boolean/numerical queries — the majority of enterprise FAQ use cases — the current pipeline is already near-ceiling.
+
+**Planned migration path** (see `docs/architecture.md` for detail):
+1. **Near-term**: Replace in-memory BM25 cache with PostgreSQL `tsvector` full-text search — removes stateful cache invalidation without changing the pipeline shape.
+2. **Mid-term**: Wrap retrieval backends as LangChain tools; add a **dual-path router** — fast path (current pipeline, <4 s) for simple queries, ReAct loop (3–5 steps, Gemini Flash) for complex/multi-hop.
+3. **Long-term**: Evaluate upgrading from `text-embedding-004` to `jina-embeddings-v4` or `nemotron-colembed` once the retrieval benchmark harness (`POST /api/evaluate/batch`) has enough domain-specific test cases to measure the delta.
+
 ---
 
 ## 🛠️ Tech Stack
