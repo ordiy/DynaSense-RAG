@@ -32,6 +32,10 @@ def _kb_tables_ddl() -> list[str]:
             embedding   vector({EMBEDDING_DIM}) NOT NULL
         )
         """,
+        # GIN index for full-text search (replaces in-memory BM25).
+        # 'simple' config: language-agnostic, no stemming, CJK-friendly.
+        "CREATE INDEX IF NOT EXISTS kb_embedding_fts_idx "
+        "ON kb_embedding USING GIN(to_tsvector('simple', content))",
     ]
 
 

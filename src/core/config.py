@@ -103,6 +103,22 @@ class Settings(BaseSettings):
         description="Maximum candidate documents passed to Jina cross-encoder reranker in hybrid fusion.",
     )
 
+    # --- Agentic (ReAct) retrieval ---
+    agentic_retrieval_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable ReAct agentic retrieval loop (LangGraph create_react_agent). "
+            "When True, run_chat_pipeline dispatches here before hybrid/vector fallbacks. "
+            "Disabled by default: higher latency (~2× hybrid) but better multi-hop recall."
+        ),
+    )
+    agentic_max_steps: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum tool-call iterations for the agentic ReAct loop.",
+    )
+
     # --- Ingestion ---
     skip_graph_ingest: bool = Field(
         default=False,

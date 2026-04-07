@@ -47,12 +47,8 @@ def clean_settings_cache():
 
 @pytest.fixture(autouse=False)
 def clean_bm25_cache():
-    """Reset the BM25 index cache between tests."""
-    import src.hybrid_rag as hr
-
-    hr._bm25_cache = None
+    """Legacy fixture — BM25 cache was replaced by PostgreSQL FTS; kept as no-op for compatibility."""
     yield
-    hr._bm25_cache = None
 
 
 @pytest.fixture()

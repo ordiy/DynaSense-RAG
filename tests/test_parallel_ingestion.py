@@ -90,21 +90,20 @@ def test_returns_zero_when_driver_unavailable(clean_bm25_cache):
     assert n == 0
 
 
-def test_bm25_cache_invalidated_after_ingest(clean_bm25_cache):
-    """BM25 cache must be None after ingest_chunks_to_graph completes."""
-    import src.hybrid_rag as hr
-    from langchain_core.documents import Document
+def test_ingest_completes_without_cache_errors(clean_bm25_cache):
+    """ingest_chunks_to_graph must complete without BM25 / cache-related errors.
 
-    # Pre-populate cache
-    hr._bm25_cache = ([], MagicMock())
-    assert hr._bm25_cache is not None
+    BM25 cache was replaced by PostgreSQL FTS (stateless); this test verifies that
+    ingest runs successfully with no side-effect state to manage.
+    """
+    import src.hybrid_rag as hr
 
     with patch("src.hybrid_rag.get_driver", return_value=object()), \
          patch("src.hybrid_rag.extract_triples_from_text", return_value=[]), \
          patch("src.hybrid_rag.merge_triple"):
-        hr.ingest_chunks_to_graph(["chunk"], ["c1"], "f.txt")
+        n = hr.ingest_chunks_to_graph(["chunk"], ["c1"], "f.txt")
 
-    assert hr._bm25_cache is None, "BM25 cache must be invalidated after ingestion"
+    assert n == 0  # no triples extracted (extract returns [])
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +131,7 @@ def test_parallel_extraction_is_faster_than_sequential():
 
     with patch("src.hybrid_rag.get_driver", return_value=object()), \
          patch("src.hybrid_rag.extract_triples_from_text", side_effect=slow_extract), \
-         patch("src.hybrid_rag.merge_triple"), \
-         patch("src.hybrid_rag.invalidate_bm25_cache"):
+         patch("src.hybrid_rag.merge_triple"):
         start = time.monotonic()
         hr.ingest_chunks_to_graph(chunks, chunk_ids, "f.txt")
         elapsed = time.monotonic() - start
@@ -154,8 +152,7 @@ def test_merge_triple_called_with_correct_source(clean_bm25_cache):
     with patch("src.hybrid_rag.get_driver", return_value=object()), \
          patch("src.hybrid_rag.extract_triples_from_text",
                return_value=[_triple("CompanyX", "founded_by", "Alice")]), \
-         patch("src.hybrid_rag.merge_triple") as mock_merge, \
-         patch("src.hybrid_rag.invalidate_bm25_cache"):
+         patch("src.hybrid_rag.merge_triple") as mock_merge:
         hr.ingest_chunks_to_graph(chunks, chunk_ids, "annual_report.txt")
 
     mock_merge.assert_called_once_with(

@@ -220,13 +220,7 @@ def process_document_task(content: str, filename: str, task_state: dict):
             vectorstore.add_embedding_rows(rows_pg)
 
         # Graph: LLM triple extraction + merge (optional; skip for benchmarks)
-        if get_settings().skip_graph_ingest:
-            try:
-                from src.hybrid_rag import invalidate_bm25_cache
-                invalidate_bm25_cache()
-            except Exception:
-                pass
-        else:
+        if not get_settings().skip_graph_ingest:
             try:
                 from src.hybrid_rag import ingest_chunks_to_graph
 
@@ -624,10 +618,21 @@ def invoke_rag_app(inputs: AgentState) -> AgentState:
 
 def run_chat_pipeline(query: str):
     """
-    Default: Hybrid RAG (router + dense/BM25 + graph + fusion rerank) when hybrid_rag_enabled=True.
-    Fallback: original LangGraph vector-only pipeline on failure or hybrid_rag_enabled=False.
+    Dispatch order:
+      1. Agentic ReAct loop (``agentic_retrieval_enabled=True``) — multi-hop, highest recall.
+      2. Hybrid RAG (``hybrid_rag_enabled=True``) — fast, production default.
+      3. Vector-only LangGraph — fallback.
     """
     from src.core.citations import build_citations_from_context
+
+    s = get_settings()
+    if s.agentic_retrieval_enabled:
+        try:
+            from src.agentic_rag import run_agentic_chat_pipeline
+
+            return run_agentic_chat_pipeline(query)
+        except Exception:
+            logger.exception("Agentic pipeline failed; falling back to hybrid/vector.")
 
     if get_settings().hybrid_rag_enabled:
         try:

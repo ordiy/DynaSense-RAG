@@ -1,22 +1,20 @@
 """
-Hybrid RAG MVP: Query Router + Dense/BM25 vector path + PostgreSQL graph path + unified rerank.
+Hybrid RAG: Query Router + Dense/FTS vector path + PostgreSQL graph path + unified rerank.
 
-Implements readme-v2-1.md topology at MVP scope:
   - Intent router: VECTOR | GRAPH | GLOBAL | HYBRID (LLM structured output)
-  - VECTOR: dense retrieval + BM25 over child chunks (parent expansion) -> fusion rerank Top-5
-  - GRAPH: keyword-based subgraph -> linearized text as context
-  - GLOBAL: graph summary statistics + optional dense hint
-  - HYBRID: concurrent vector + graph candidates -> single rerank Top-5
+  - VECTOR: dense (pgvector) + PostgreSQL FTS (tsvector GIN) → parent expansion → fusion rerank
+  - GRAPH: keyword-based subgraph → linearized triples as context
+  - GLOBAL: graph summary statistics + optional dense anchor
+  - HYBRID: dense + FTS + graph candidates → single Jina rerank Top-N
 
-Downstream grading/generation reuses rag_core.grade_documents_node / generate_node logic
-by invoking those functions on a synthetic AgentState.
+FTS replaces the former in-memory BM25 cache (rank_bm25 + threading.Lock).
+No cache invalidation is needed; the GIN index is always up to date.
 """
 from __future__ import annotations
 
 import hashlib
 import logging
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Iterator, Literal
@@ -47,47 +45,6 @@ from src.rag_core import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# BM25 index cache — built once from all child chunks, invalidated on ingest.
-# ---------------------------------------------------------------------------
-_bm25_cache: tuple[list[dict], Any] | None = None  # (children_list, BM25Okapi)
-_bm25_lock = threading.Lock()
-
-
-def invalidate_bm25_cache() -> None:
-    """Drop the cached BM25 index so the next query rebuilds it from fresh data."""
-    global _bm25_cache
-    with _bm25_lock:
-        _bm25_cache = None
-    logger.debug("BM25 cache invalidated.")
-
-
-def _get_or_build_bm25() -> tuple[list[dict], Any] | None:
-    """
-    Return the cached (children, BM25Okapi) pair, building it on first call.
-    Thread-safe double-checked locking.
-    """
-    global _bm25_cache
-    if _bm25_cache is not None:
-        return _bm25_cache
-    with _bm25_lock:
-        if _bm25_cache is not None:
-            return _bm25_cache
-        try:
-            from rank_bm25 import BM25Okapi
-        except ImportError:
-            logger.warning("BM25: rank_bm25 not installed; skipping.")
-            return None
-        children = list(collection.find({"type": "child"}))
-        if not children:
-            return None
-        tokenized = [_tokenize(str(c.get("content", ""))) for c in children]
-        if not any(tokenized):
-            return None
-        _bm25_cache = (children, BM25Okapi(tokenized))
-        logger.debug("BM25 index built: %d child chunks.", len(children))
-        return _bm25_cache
 
 
 class RouteDecision(BaseModel):
@@ -238,34 +195,44 @@ def ingest_chunks_to_graph(chunks: list[str], chunk_ids: list[str], source: str)
             n += 1
         except Exception as e:
             logger.debug("merge_triple skip: %s", e)
-
-    # New child docs were added — invalidate the BM25 cache so the next query sees them.
-    invalidate_bm25_cache()
     return n
 
 
-def bm25_parent_documents(question: str, top_child: int | None = None) -> tuple[list[Document], list[str]]:
+def fts_parent_documents(
+    question: str, top_child: int | None = None
+) -> tuple[list[Document], list[str]]:
+    """
+    PostgreSQL full-text search: child chunks → deduplicated parent documents.
+
+    Drop-in replacement for the removed ``bm25_parent_documents``.
+    Uses a GIN index on ``to_tsvector('simple', content)`` — no in-memory
+    state, no cache invalidation needed on ingest.
+    """
     from src.core.config import get_settings
+    from src.infrastructure.persistence.postgres_connection import get_pool
+    from src.infrastructure.persistence.postgres_fts import fulltext_search_children
 
     if top_child is None:
         top_child = get_settings().hybrid_bm25_top_child
+
     logs: list[str] = []
-    qtok = _tokenize(question)
-    if not qtok:
-        return [], ["BM25: empty query tokens; skipping."]
+    if not question.strip():
+        return [], ["FTS: empty query; skipping."]
 
-    cached = _get_or_build_bm25()
-    if cached is None:
-        return [], ["BM25: no child chunks in store or rank_bm25 unavailable."]
+    try:
+        pool = get_pool()
+    except Exception as exc:
+        return [], [f"FTS: pool not available ({exc}); skipping."]
 
-    children, bm25 = cached
-    scores = bm25.get_scores(qtok)
-    ranked_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_child]
+    rows = fulltext_search_children(question, pool, top_k=top_child)
+    if not rows:
+        logs.append("FTS: no child chunks matched.")
+        return [], logs
 
     parent_ids_ordered: list[str] = []
     seen: set[str] = set()
-    for i in ranked_idx:
-        pid = children[i].get("parent_id")
+    for _id, _content, meta, _rank in rows:
+        pid = (meta or {}).get("parent_id", "")
         if pid and pid not in seen:
             seen.add(pid)
             parent_ids_ordered.append(pid)
@@ -282,10 +249,10 @@ def bm25_parent_documents(question: str, top_child: int | None = None) -> tuple[
         pr = parent_records.get(pid)
         if not pr:
             continue
-        full_text = f"[Source: {pr.get('source', 'Unknown')}]\n[bm25]\n{pr.get('full_content', '')}"
-        docs.append(Document(page_content=full_text, metadata={"parent_id": pid, "source": "bm25"}))
+        full_text = f"[Source: {pr.get('source', 'Unknown')}]\n[fts]\n{pr.get('full_content', '')}"
+        docs.append(Document(page_content=full_text, metadata={"parent_id": pid, "source": "fts"}))
 
-    logs.append(f"BM25: top {len(ranked_idx)} child hits -> {len(docs)} parent docs.")
+    logs.append(f"FTS: {len(rows)} child hits → {len(docs)} parent docs.")
     return docs, logs
 
 
@@ -367,9 +334,9 @@ def collect_vector_path(question: str) -> tuple[list[Document], list[str]]:
     logs: list[str] = []
     dense_docs, dl = retrieve_parent_documents_expanded(question, dense_k=get_settings().hybrid_dense_k)
     logs.extend(dl)
-    bm_docs, bl = bm25_parent_documents(question)
-    logs.extend(bl)
-    return dense_docs + bm_docs, logs
+    fts_docs, fl = fts_parent_documents(question)
+    logs.extend(fl)
+    return dense_docs + fts_docs, logs
 
 
 def gather_route_candidates(question: str, effective_route: str) -> tuple[list[Document], list[str]]:
