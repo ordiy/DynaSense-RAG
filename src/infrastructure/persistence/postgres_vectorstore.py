@@ -10,10 +10,10 @@ import logging
 from typing import Any
 
 from langchain_core.documents import Document
-from pgvector.psycopg import register_vector
 from psycopg.types.json import Json
 
 logger = logging.getLogger(__name__)
+# register_vector is now called once per pooled connection in postgres_connection._configure_connection.
 
 
 class PostgresVectorStore:
@@ -31,7 +31,6 @@ class PostgresVectorStore:
         """Embed the question and fetch the *k* nearest child chunks by cosine distance."""
         qvec = self._embed.embed_query(query)
         with self._pool.connection() as conn:
-            register_vector(conn)
             rows = conn.execute(
                 """
                 SELECT id, content, meta, embedding <=> %s::vector AS dist
@@ -75,7 +74,6 @@ class PostgresVectorStore:
         if not rows:
             return
         with self._pool.connection() as conn:
-            register_vector(conn)
             with conn.cursor() as cur:
                 for rid, text, meta, emb in rows:
                     cur.execute(

@@ -29,7 +29,15 @@ Instead, this architecture achieves high precision through:
 ║                     DATA INGESTION PIPELINE                         ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
-Raw Documents (TXT/MD)
+Raw Documents
+  PDF · DOCX · XLSX · TXT · MD
+      │
+      ▼
+[ Format Extraction ]
+  pdf_extract   → plain text (pypdf, text-layer only)
+  docx_extract  → paragraphs + tables (python-docx)
+  xlsx_extract  → sheets as tab-separated rows (openpyxl)
+  TXT/MD        → UTF-8 passthrough
       │
       ▼
 [ Jina Semantic Segmenter ] ──(Chunking)──> Child Text Chunks

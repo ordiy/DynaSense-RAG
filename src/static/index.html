@@ -3,978 +3,1152 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MAP-RAG Enterprise MVP</title>
+    <title>MAP-RAG · Engineer Console</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
-
-        body { 
-            padding-top: 40px; 
-            background: linear-gradient(135deg, #1e1e2f 0%, #2b2b40 100%);
-            color: #f8f9fa;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        :root {
+            --bg: #0f1117;
+            --surface: #171923;
+            --surface2: #1e2130;
+            --border: rgba(255,255,255,0.07);
+            --accent: #38bdf8;
+            --accent2: #818cf8;
+            --success: #34d399;
+            --warning: #fb923c;
+            --text: #e2e8f0;
+            --muted: #64748b;
+            --radius: 10px;
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        html { font-size: 15px; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
             min-height: 100vh;
         }
-        .card { 
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 15px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-            color: white;
-            margin-bottom: 20px; 
+
+        /* ── Top navbar ── */
+        .topbar {
+            position: sticky; top: 0; z-index: 100;
+            background: rgba(15,17,23,0.92);
+            backdrop-filter: blur(14px);
+            border-bottom: 1px solid var(--border);
+            padding: 0 1.5rem;
+            height: 54px;
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 1rem;
         }
-        .card-body { padding: 2rem; }
-        h2 { font-weight: 800; background: -webkit-linear-gradient(45deg, #00d2ff, #3a7bd5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .nav-tabs .nav-link { color: #a9a9b3; border-radius: 10px 10px 0 0; border: none; }
-        .nav-tabs .nav-link.active { background-color: rgba(255, 255, 255, 0.1); color: #00d2ff; font-weight: bold; border-bottom: 2px solid #00d2ff; }
-        .nav-tabs { border-bottom: 1px solid rgba(255,255,255,0.1); }
-        .log-box { 
-            background: #111119; 
-            color: #00ffcc; 
-            padding: 15px; 
-            border-radius: 10px; 
-            height: 250px; 
-            overflow-y: auto; 
-            font-family: 'Courier New', Courier, monospace;
-            border: 1px solid rgba(0,255,204,0.2);
-            box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+        .topbar-brand {
+            display: flex; align-items: center; gap: 0.65rem;
+            text-decoration: none; color: inherit;
+            flex-shrink: 0;
         }
-        .form-control { background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.2); color: white; border-radius: 8px; }
-        .form-control:focus { background: rgba(0,0,0,0.3); color: white; border-color: #00d2ff; box-shadow: 0 0 0 0.25rem rgba(0, 210, 255, 0.25); }
-        .btn-primary { background: linear-gradient(45deg, #00d2ff, #3a7bd5); border: none; border-radius: 8px; font-weight: bold; }
-        .btn-success { background: linear-gradient(45deg, #11998e, #38ef7d); border: none; border-radius: 8px; font-weight: bold; }
-        .btn-warning { background: linear-gradient(45deg, #f12711, #f5af19); border: none; border-radius: 8px; font-weight: bold; color: white;}
-        .alert-info { background: rgba(0, 210, 255, 0.1); border: 1px solid rgba(0, 210, 255, 0.3); color: #e0f7ff; border-radius: 10px; }
-        .list-group-item { background: rgba(0,0,0,0.2); color: #ccc; border: 1px solid rgba(255,255,255,0.1); }
-        .list-group-item-success { background: rgba(56, 239, 125, 0.1); color: #38ef7d; border-color: rgba(56, 239, 125, 0.3); }
-        .text-muted { color: #8c8c9e !important; }
-        .chat-box {
-            height: 420px;
+        .topbar-logo {
+            width: 30px; height: 30px;
+            background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.85rem; font-weight: 800; color: #fff; letter-spacing: -0.5px;
+        }
+        .topbar-name { font-weight: 700; font-size: 0.95rem; color: var(--text); }
+        .topbar-name span { color: var(--muted); font-weight: 400; font-size: 0.8rem; margin-left: 0.4rem; }
+        .topbar-right { display: flex; align-items: center; gap: 0.75rem; }
+        .feedback-chip {
+            display: flex; align-items: center; gap: 0.5rem;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 0.3rem 0.75rem;
+            font-size: 0.78rem; color: var(--muted);
+        }
+        .feedback-chip strong { color: var(--text); }
+        .btn-refresh {
+            background: none; border: none;
+            color: var(--accent); font-size: 0.78rem; cursor: pointer; padding: 0;
+        }
+        .btn-refresh:hover { opacity: 0.75; }
+        .demo-link {
+            font-size: 0.78rem; color: var(--accent); text-decoration: none;
+            padding: 0.3rem 0.75rem;
+            border: 1px solid rgba(56,189,248,0.25);
+            border-radius: 20px;
+            transition: background 0.15s;
+        }
+        .demo-link:hover { background: rgba(56,189,248,0.08); color: var(--accent); }
+
+        /* ── Main layout ── */
+        .page-wrap {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem 4rem;
+        }
+
+        /* ── Nav pills ── */
+        .nav-pills-custom {
+            display: flex; gap: 0.25rem;
+            flex-wrap: wrap;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0;
+            margin-bottom: 1.75rem;
+        }
+        .nav-pills-custom .nav-link {
+            color: var(--muted);
+            border-radius: var(--radius) var(--radius) 0 0;
+            font-size: 0.84rem; font-weight: 500;
+            padding: 0.55rem 1.1rem;
+            border: 1px solid transparent;
+            border-bottom: none;
+            margin-bottom: -1px;
+            background: transparent;
+            transition: color 0.15s;
+        }
+        .nav-pills-custom .nav-link:hover { color: var(--text); }
+        .nav-pills-custom .nav-link.active {
+            color: var(--accent);
+            background: var(--surface);
+            border-color: var(--border);
+            border-bottom-color: var(--surface);
+        }
+
+        /* ── Cards ── */
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .panel-title {
+            font-size: 0.9rem; font-weight: 600;
+            color: var(--text); margin-bottom: 0.25rem;
+        }
+        .panel-sub {
+            font-size: 0.8rem; color: var(--muted);
+            line-height: 1.55; margin-bottom: 1.25rem;
+        }
+
+        /* ── Upload zone ── */
+        .upload-zone {
+            border: 2px dashed rgba(56,189,248,0.25);
+            border-radius: var(--radius);
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            margin-bottom: 1rem;
+            background: rgba(56,189,248,0.02);
+        }
+        .upload-zone:hover, .upload-zone.drag-over {
+            border-color: var(--accent);
+            background: rgba(56,189,248,0.06);
+        }
+        .upload-zone-icon { font-size: 2rem; margin-bottom: 0.5rem; opacity: 0.7; }
+        .upload-zone-text { font-size: 0.88rem; color: var(--muted); }
+        .upload-zone-text strong { color: var(--accent); }
+        .file-badges { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: center; margin-top: 0.65rem; }
+        .file-badge {
+            font-size: 0.72rem; font-weight: 600;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--border);
+            color: var(--muted);
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px; letter-spacing: 0.03em;
+        }
+        .selected-file-info {
+            font-size: 0.82rem; color: var(--text);
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.5rem 0.85rem;
+            margin-bottom: 1rem;
+            display: none;
+            align-items: center; gap: 0.5rem;
+        }
+        .selected-file-info .fname { font-weight: 600; }
+        .selected-file-info .fsize { color: var(--muted); font-size: 0.76rem; }
+
+        /* ── Progress ── */
+        .upload-progress { display: none; }
+        .progress-label {
+            display: flex; justify-content: space-between;
+            font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem;
+        }
+        .progress-track {
+            height: 6px; background: rgba(255,255,255,0.08);
+            border-radius: 99px; overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+            border-radius: 99px;
+            transition: width 0.4s ease;
+        }
+        .progress-fill.complete { background: linear-gradient(90deg, #34d399, #10b981); }
+
+        /* ── Forms ── */
+        .form-control-dark {
+            background: rgba(0,0,0,0.25);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 0.88rem;
+            padding: 0.55rem 0.85rem;
+            width: 100%;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .form-control-dark::placeholder { color: var(--muted); }
+        .form-control-dark:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(56,189,248,0.15);
+            background: rgba(0,0,0,0.35);
+            color: var(--text);
+        }
+        .form-label-sm { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; display: block; }
+        .form-check-dark .form-check-input { background-color: var(--surface2); border-color: rgba(255,255,255,0.2); }
+        .form-check-dark .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
+        .form-check-dark .form-check-label { font-size: 0.84rem; color: var(--muted); }
+
+        /* ── Buttons ── */
+        .btn-primary-custom {
+            background: linear-gradient(135deg, #38bdf8, #818cf8);
+            border: none; border-radius: 8px;
+            color: #fff; font-weight: 600; font-size: 0.85rem;
+            padding: 0.6rem 1.25rem; cursor: pointer;
+            transition: opacity 0.15s, transform 0.1s;
+            white-space: nowrap;
+        }
+        .btn-primary-custom:hover { opacity: 0.88; }
+        .btn-primary-custom:active { transform: scale(0.98); }
+        .btn-primary-custom:disabled { opacity: 0.45; cursor: not-allowed; }
+
+        .btn-success-custom {
+            background: linear-gradient(135deg, #34d399, #10b981);
+            border: none; border-radius: 8px;
+            color: #fff; font-weight: 600; font-size: 0.85rem;
+            padding: 0.6rem 1.25rem; cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .btn-success-custom:hover { opacity: 0.88; }
+
+        .btn-outline-custom {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 8px;
+            color: var(--text); font-size: 0.85rem;
+            padding: 0.55rem 1.1rem; cursor: pointer;
+            transition: border-color 0.15s, color 0.15s;
+        }
+        .btn-outline-custom:hover { border-color: var(--accent); color: var(--accent); }
+
+        .btn-warn-custom {
+            background: linear-gradient(135deg, #fb923c, #f59e0b);
+            border: none; border-radius: 8px;
+            color: #fff; font-weight: 600; font-size: 0.85rem;
+            padding: 0.6rem 1.25rem; cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .btn-warn-custom:hover { opacity: 0.88; }
+
+        /* ── Log box ── */
+        .log-box {
+            background: #090b10;
+            color: #7dd3fc;
+            padding: 1rem;
+            border-radius: 8px;
+            height: 230px;
             overflow-y: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 0.78rem;
+            border: 1px solid rgba(56,189,248,0.12);
+            line-height: 1.55;
         }
-        .debug-table { font-size: 0.85rem; color: #e0e0e8; }
-        .debug-table th { color: #00d2ff; border-color: rgba(255,255,255,0.12); }
-        .debug-table td { border-color: rgba(255,255,255,0.08); vertical-align: top; }
-        .metric-bar-wrap { background: rgba(0,0,0,0.35); border-radius: 6px; height: 10px; overflow: hidden; margin-top: 4px; }
-        .metric-bar-fill { height: 100%; background: linear-gradient(90deg, #11998e, #38ef7d); border-radius: 6px; }
+        .log-box.answer-box {
+            color: var(--text);
+            height: auto; min-height: 80px;
+            font-family: inherit;
+            font-size: 0.88rem;
+        }
+        .log-box::-webkit-scrollbar { width: 6px; }
+        .log-box::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
 
+        /* ── Chat box ── */
+        .chat-box { height: 380px; overflow-y: auto; }
+
+        /* ── Citations ── */
+        .citation-list { list-style: none; padding: 0; margin: 0; }
+        .citation-item {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.55rem 0.8rem;
+            margin-bottom: 0.4rem;
+            font-size: 0.82rem;
+        }
+        .citation-item .ci-label { color: var(--accent); font-weight: 600; }
+        .citation-item .ci-preview { color: var(--muted); font-size: 0.77rem; margin-top: 0.2rem; max-height: 60px; overflow: hidden; }
+
+        /* ── Route info ── */
+        .route-info {
+            font-size: 0.76rem; color: var(--muted);
+            background: var(--surface2); border-radius: 6px;
+            padding: 0.35rem 0.7rem; display: inline-block;
+        }
+
+        /* ── Feedback row ── */
+        .fb-row {
+            display: none; align-items: center; gap: 0.5rem;
+            flex-wrap: wrap; font-size: 0.8rem; color: var(--muted);
+            margin-top: 0.75rem;
+        }
+        .fb-row.show { display: flex; }
+        .fb-btn {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.25rem 0.6rem;
+            cursor: pointer; font-size: 0.9rem;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .fb-btn:hover:not(:disabled) { border-color: var(--accent); background: rgba(56,189,248,0.08); }
+        .fb-btn:disabled { opacity: 0.4; cursor: default; }
+        .fb-done { color: var(--success); font-size: 0.76rem; }
+
+        /* ── Metric bars ── */
+        .metric-card {
+            background: var(--surface2); border-radius: 8px;
+            padding: 0.75rem 1rem; border: 1px solid var(--border);
+        }
+        .metric-label { font-size: 0.76rem; color: var(--muted); margin-bottom: 0.3rem; }
+        .metric-track { height: 5px; background: rgba(255,255,255,0.08); border-radius: 99px; overflow: hidden; }
+        .metric-fill { height: 100%; background: linear-gradient(90deg, var(--success), #10b981); border-radius: 99px; }
+        .metric-val { font-size: 0.82rem; font-weight: 600; color: var(--text); margin-top: 0.25rem; }
+
+        /* ── Debug tables ── */
+        .debug-table { font-size: 0.8rem; color: var(--text); border-color: var(--border); }
+        .debug-table th { color: var(--accent); border-color: var(--border); font-weight: 600; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .debug-table td { border-color: var(--border); vertical-align: top; }
+        .table-wrap { overflow-x: auto; }
+
+        /* ── Empty state ── */
+        .empty-state {
+            text-align: center; padding: 2rem 1rem;
+            color: var(--muted); font-size: 0.85rem;
+        }
+        .empty-state-icon { font-size: 2rem; margin-bottom: 0.5rem; opacity: 0.4; }
+
+        /* ── Spinner ── */
+        .spinner-sm {
+            display: inline-block; width: 14px; height: 14px;
+            border: 2px solid rgba(56,189,248,0.25);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            vertical-align: middle; margin-right: 0.35rem;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Eval results ── */
+        .eval-pre {
+            background: #090b10; color: #a5f3c0;
+            padding: 0.75rem; border-radius: 8px;
+            font-size: 0.78rem; font-family: monospace;
+            border: 1px solid rgba(52,211,153,0.15);
+        }
+        .eval-logs-pre {
+            background: #090b10; color: #93c5fd;
+            padding: 0.75rem; border-radius: 8px;
+            font-size: 0.76rem; font-family: monospace;
+            max-height: 110px; overflow: auto;
+            border: 1px solid rgba(147,197,253,0.12);
+        }
+        .hit-item {
+            font-size: 0.82rem; padding: 0.5rem 0.75rem;
+            border-radius: 8px; border: 1px solid var(--border);
+            margin-bottom: 0.4rem; background: rgba(255,255,255,0.02);
+        }
+        .hit-item.hit { border-color: rgba(52,211,153,0.4); background: rgba(52,211,153,0.05); color: var(--success); }
+
+        /* ── Section heading ── */
+        .section-h { font-size: 0.8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.6rem; }
     </style>
-
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 
-<div class="container">
-    <h2 class="mb-2">🧠 MAP-RAG Enterprise MVP <span class="badge bg-secondary">v1.10+</span></h2>
-    <p class="text-muted small mb-2">客户演示门户：<a href="/demo" class="link-info">/demo</a>（浅色对话界面）</p>
-    <div class="alert alert-secondary py-2 px-3 mb-3 d-flex flex-wrap align-items-center gap-2" style="font-size:0.88rem;background:rgba(255,255,255,0.06);border-color:rgba(255,255,255,0.12);">
-        <span><strong>Feedback</strong> <span class="text-muted fw-normal">(进程内)</span></span>
-        <span id="feedbackSummaryText" class="text-muted">加载中…</span>
-        <button type="button" class="btn btn-sm btn-outline-info" id="btnFeedbackRefresh" title="GET /api/feedback/summary">Refresh</button>
+<!-- Top navigation bar -->
+<header class="topbar">
+    <a class="topbar-brand" href="/">
+        <div class="topbar-logo">MR</div>
+        <span class="topbar-name">MAP-RAG <span>Engineer Console</span></span>
+    </a>
+    <div class="topbar-right">
+        <div class="feedback-chip">
+            <span id="feedbackSummaryText">–</span>
+            <button class="btn-refresh" id="btnFeedbackRefresh" title="Refresh feedback stats">↻</button>
+        </div>
+        <a class="demo-link" href="/demo" target="_blank">Customer Demo ↗</a>
     </div>
-    
-    <ul class="nav nav-tabs" id="myTab" role="tablist">
+</header>
+
+<div class="page-wrap">
+    <!-- Nav tabs -->
+    <ul class="nav nav-pills-custom" id="mainTab" role="tablist">
         <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload" type="button" role="tab">1. Data Ingestion</button>
+            <button class="nav-link active" id="tab-upload" data-bs-toggle="tab" data-bs-target="#pane-upload" type="button" role="tab">
+                Data Ingestion
+            </button>
         </li>
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="chat-tab" data-bs-toggle="tab" data-bs-target="#chat" type="button" role="tab">2. RAG Chat</button>
+            <button class="nav-link" id="tab-chat" data-bs-toggle="tab" data-bs-target="#pane-chat" type="button" role="tab">
+                RAG Chat
+            </button>
         </li>
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="eval-tab" data-bs-toggle="tab" data-bs-target="#eval" type="button" role="tab">3. Evaluation (NDCG/Recall)</button>
+            <button class="nav-link" id="tab-eval" data-bs-toggle="tab" data-bs-target="#pane-eval" type="button" role="tab">
+                Evaluation
+            </button>
         </li>
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="chatTest-tab" data-bs-toggle="tab" data-bs-target="#chatTest" type="button" role="tab">4. Chat Test (Memory)</button>
+            <button class="nav-link" id="tab-chattest" data-bs-toggle="tab" data-bs-target="#pane-chattest" type="button" role="tab">
+                Chat Test
+            </button>
         </li>
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="lance-tab" data-bs-toggle="tab" data-bs-target="#lancePane" type="button" role="tab">5. PG vectors</button>
+            <button class="nav-link" id="tab-vectors" data-bs-toggle="tab" data-bs-target="#pane-vectors" type="button" role="tab">
+                Vectors
+            </button>
         </li>
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="neo4j-tab" data-bs-toggle="tab" data-bs-target="#neo4jPane" type="button" role="tab">6. Graph</button>
+            <button class="nav-link" id="tab-graph" data-bs-toggle="tab" data-bs-target="#pane-graph" type="button" role="tab">
+                Graph
+            </button>
         </li>
     </ul>
 
-    <div class="tab-content" id="myTabContent">
-        <!-- 1. Upload Tab -->
-        <div class="tab-pane fade show active" id="upload" role="tabpanel">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Upload Knowledge Document (TXT / MD / PDF)</h5>
-                    <p class="card-text text-muted">Text is extracted from PDFs (text-based PDFs; scanned PDFs need OCR). Then: Jina chunking → Vertex embeddings into PostgreSQL (pgvector + JSONB parent/child); optional graph triple ingest when enabled.</p>
-                    <div class="input-group mb-3">
-                        <input type="file" class="form-control" id="fileInput" accept=".txt,.md,.pdf,application/pdf">
-                        <button class="btn btn-primary" type="button" onclick="uploadFile()">Upload & Process</button>
+    <div class="tab-content" id="mainTabContent">
+
+        <!-- ── 1. Data Ingestion ── -->
+        <div class="tab-pane fade show active" id="pane-upload" role="tabpanel">
+            <div class="panel">
+                <div class="panel-title">Upload Knowledge Document</div>
+                <div class="panel-sub">
+                    PDF (text-based), DOCX (paragraphs + tables), XLSX (all sheets), TXT, MD — all converted to
+                    plain text before chunking. Pipeline: Jina segmentation → Vertex embeddings → PostgreSQL
+                    pgvector + JSONB parent/child; optional knowledge-graph triple extraction.
+                </div>
+
+                <!-- Drag-drop zone -->
+                <div class="upload-zone" id="uploadZone" tabindex="0" role="button" aria-label="Click or drag a file to upload">
+                    <div class="upload-zone-icon">&#8679;</div>
+                    <div class="upload-zone-text">
+                        <strong>Click to select</strong> or drag a file here
                     </div>
-                    
-                    <div id="progressContainer" style="display: none;">
-                        <h6 id="statusText">Status: Pending...</h6>
-                        <div class="progress">
-                            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
-                        </div>
+                    <div class="file-badges">
+                        <span class="file-badge">PDF</span>
+                        <span class="file-badge">DOCX</span>
+                        <span class="file-badge">XLSX</span>
+                        <span class="file-badge">TXT</span>
+                        <span class="file-badge">MD</span>
+                    </div>
+                </div>
+                <input type="file" id="fileInput" style="display:none"
+                    accept=".txt,.md,.markdown,.pdf,.docx,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+
+                <!-- Selected file info -->
+                <div class="selected-file-info" id="selectedFileInfo">
+                    <span>&#128196;</span>
+                    <span class="fname" id="selectedFileName"></span>
+                    <span class="fsize" id="selectedFileSize"></span>
+                </div>
+
+                <button class="btn-primary-custom" id="btnUpload" onclick="uploadFile()" disabled>
+                    Upload &amp; Process
+                </button>
+
+                <!-- Progress -->
+                <div class="upload-progress mt-3" id="progressContainer">
+                    <div class="progress-label">
+                        <span id="statusText">Uploading…</span>
+                        <span id="progressPct">0%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" id="progressBar" style="width:0%"></div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- 2. Chat Tab -->
-        <div class="tab-pane fade" id="chat" role="tabpanel">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Ask the Knowledge Base</h5>
-                    <div class="input-group mb-3">
-                        <input type="text" class="form-control" id="chatQuery" placeholder="e.g. What is the 2024 strategic plan?">
-                        <button class="btn btn-success" type="button" onclick="sendChat()">Send</button>
-                        <button class="btn btn-outline-success" type="button" title="POST /api/chat/stream (SSE)" onclick="sendChatStream()">Stream</button>
-                    </div>
-                    <p id="chatRouteInfo" class="small text-muted mb-2"></p>
-                    
-                    <h6>System Execution Logs (Anti-Hallucination Graph)</h6>
-                    <div class="log-box mb-3" id="chatLogs"></div>
+        <!-- ── 2. RAG Chat ── -->
+        <div class="tab-pane fade" id="pane-chat" role="tabpanel">
+            <div class="panel">
+                <div class="panel-title">Query the Knowledge Base</div>
+                <div class="panel-sub">Send a question through the full RAG pipeline (retrieve → grade → generate). Stream mode delivers tokens as they arrive.</div>
 
-                    <h6>Final Answer</h6>
-                    <div class="alert alert-info" id="chatAnswer" style="min-height: 50px;">Waiting for query...</div>
-                    <div id="chatCitations" class="mt-2"></div>
-                    <div id="chatFeedbackRow" class="mt-2 flex-wrap align-items-center gap-2" style="display:none;">
-                        <span class="text-muted small">本次回答是否有帮助？</span>
-                        <button type="button" class="btn btn-sm btn-outline-success fb-console" data-rating="1" title="有帮助">👍</button>
-                        <button type="button" class="btn btn-sm btn-outline-warning fb-console" data-rating="-1" title="需改进">👎</button>
-                        <span id="chatFeedbackDone" class="small text-info"></span>
-                    </div>
+                <div class="d-flex gap-2 mb-3">
+                    <input type="text" class="form-control-dark" id="chatQuery" placeholder="e.g. What are the key compliance requirements?">
+                    <button class="btn-success-custom" type="button" onclick="sendChat()">Send</button>
+                    <button class="btn-outline-custom" type="button" onclick="sendChatStream()">Stream</button>
+                </div>
+
+                <div id="chatRouteWrap" style="display:none;" class="mb-2">
+                    <span class="route-info" id="chatRouteInfo"></span>
+                </div>
+
+                <div class="section-h">Execution Trace</div>
+                <div class="log-box mb-3" id="chatLogs">Waiting for query…</div>
+
+                <div class="section-h">Answer</div>
+                <div class="log-box answer-box mb-2" id="chatAnswer">—</div>
+
+                <div id="chatCitations"></div>
+
+                <div class="fb-row" id="chatFeedbackRow">
+                    <span>Was this answer helpful?</span>
+                    <button type="button" class="fb-btn fb-console" data-rating="1" title="Helpful">&#128077;</button>
+                    <button type="button" class="fb-btn fb-console" data-rating="-1" title="Needs improvement">&#128078;</button>
+                    <span class="fb-done" id="chatFeedbackDone"></span>
                 </div>
             </div>
         </div>
 
-        <!-- 3. Eval Tab -->
-        <div class="tab-pane fade" id="eval" role="tabpanel">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Evaluate Retrieval (Recall & NDCG@K)</h5>
-                    <p class="text-muted">Test the Cross-Encoder Reranker's precision by checking if the expected substring is returned in the Top K.</p>
-                    
-                    <div class="mb-3">
-                        <label class="form-label">Test Query</label>
-                        <input type="text" class="form-control" id="evalQuery" placeholder="e.g. Who needs to approve purchases over $1000?">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Expected Substring in Document</label>
-                        <input type="text" class="form-control" id="evalExpected" placeholder="e.g. CFO">
-                    </div>
-                    <div class="form-check mb-3">
-                        <input class="form-check-input" type="checkbox" id="evalUseHybrid">
-                        <label class="form-check-label" for="evalUseHybrid">use_hybrid — use Hybrid RAG retrieval (router + fusion) instead of vector-only</label>
-                    </div>
-                    <button class="btn btn-warning" type="button" onclick="runEval()">Run Evaluation</button>
+        <!-- ── 3. Evaluation ── -->
+        <div class="tab-pane fade" id="pane-eval" role="tabpanel">
+            <div class="panel">
+                <div class="panel-title">Retrieval Evaluation — Recall &amp; NDCG@K</div>
+                <div class="panel-sub">Check whether the expected text appears in the Top-K retrieved passages after cross-encoder reranking.</div>
 
-                    <hr>
-                    <div id="evalResults" style="display:none;">
-                        <h6>Route / mode</h6>
-                        <div id="evalRouteInfo" class="text-muted small mb-2"></div>
-                        <h6>Metrics (Recall / NDCG @K)</h6>
-                        <div id="evalMetricsBars" class="mb-3"></div>
-                        <pre id="metricsJson" style="background:#0b0b10; color:#c8ffd8; padding:10px; border-radius:8px; font-size:0.8rem;"></pre>
-                        <h6>Eval logs</h6>
-                        <pre id="evalLogs" style="background:#0b0b10; color:#a9e9ff; padding:10px; border-radius:8px; font-size:0.75rem; max-height:120px; overflow:auto;"></pre>
-                        <h6>Top 3 Retrieved Contexts</h6>
-                        <ul id="topDocsList" class="list-group"></ul>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label-sm">Test Query</label>
+                        <input type="text" class="form-control-dark" id="evalQuery" placeholder="e.g. Who approves purchases over $1000?">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label-sm">Expected Substring</label>
+                        <input type="text" class="form-control-dark" id="evalExpected" placeholder="e.g. CFO">
                     </div>
                 </div>
-            </div>
-        </div>
-        <!-- 4. Chat Test Tab -->
-        <div class="tab-pane fade" id="chatTest" role="tabpanel">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Multi-turn Chat Test (2 Columns)</h5>
-                    <p class="text-muted">Left: conversation history. Right: request/response details. Memory and context-length trimming are handled by backend session APIs.</p>
+                <div class="form-check form-check-dark mb-3">
+                    <input class="form-check-input" type="checkbox" id="evalUseHybrid">
+                    <label class="form-check-label" for="evalUseHybrid">Use Hybrid RAG (router + BM25 fusion) instead of vector-only</label>
+                </div>
+                <button class="btn-warn-custom" type="button" onclick="runEval()">Run Evaluation</button>
 
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">Message</label>
-                                <div class="input-group mb-3">
-                                    <input type="text" class="form-control" id="chatTestQuery" placeholder="e.g. Ask about the strategic plan">
-                                    <button class="btn btn-success" type="button" id="chatTestSendBtn" onclick="sendChatTest()">Send</button>
-                                    <button class="btn btn-primary" type="button" id="chatTestAbBtn" onclick="runChatTestAB()">A/B Compare</button>
-                                </div>
-                            </div>
+                <div id="evalResults" style="display:none;" class="mt-4">
+                    <div class="section-h">Route</div>
+                    <div id="evalRouteInfo" class="route-info mb-3"></div>
 
-                            <h6>Conversation</h6>
-                            <div class="log-box chat-box mb-3" id="chatTestConversation"></div>
-                        </div>
+                    <div class="section-h">Metrics</div>
+                    <div class="row g-2 mb-3" id="evalMetricsBars"></div>
 
-                        <div class="col-md-6">
-                            <h6>Last Interaction Details</h6>
-                            <div class="log-box chat-box mb-3" id="chatTestDetails"></div>
-                        </div>
-                    </div>
+                    <details class="mb-3">
+                        <summary style="font-size:0.82rem;color:var(--muted);cursor:pointer;">Raw JSON</summary>
+                        <pre class="eval-pre mt-2" id="metricsJson"></pre>
+                    </details>
 
-                    <button class="btn btn-warning" type="button" onclick="resetChatTest()">Reset Session</button>
+                    <div class="section-h">Eval Logs</div>
+                    <pre class="eval-logs-pre mb-3" id="evalLogs"></pre>
+
+                    <div class="section-h">Top Retrieved Passages</div>
+                    <div id="topDocsList"></div>
                 </div>
             </div>
         </div>
 
-        <!-- 5. PostgreSQL kb_embedding inspector -->
-        <div class="tab-pane fade" id="lancePane" role="tabpanel">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">PostgreSQL vector table (<code>kb_embedding</code>)</h5>
-                    <p class="text-muted">Read-only view of embedding rows (text preview + metadata). Requires <code>DEBUG_DATA_API</code> (default on).</p>
-                    <button type="button" class="btn btn-primary mb-3" onclick="loadLanceSummary()">Refresh summary</button>
-                    <pre id="lanceSummaryOut" class="log-box" style="height:120px;">Click “Refresh summary”.</pre>
-                    <div class="row g-2 mb-2">
-                        <div class="col-md-2"><input class="form-control" id="lanceLimit" type="number" value="20" min="1" max="80"></div>
-                        <div class="col-md-2"><input class="form-control" id="lanceOffset" type="number" value="0" min="0"></div>
-                        <div class="col-md-4"><input class="form-control" id="lanceFilterSource" placeholder="source contains"></div>
-                        <div class="col-md-4"><input class="form-control" id="lanceFilterPid" placeholder="parent_id contains"></div>
+        <!-- ── 4. Chat Test ── -->
+        <div class="tab-pane fade" id="pane-chattest" role="tabpanel">
+            <div class="panel">
+                <div class="panel-title">Multi-turn Chat Test</div>
+                <div class="panel-sub">Two-column view: conversation history (left) and request/response detail (right). Session memory is managed server-side.</div>
+
+                <div class="d-flex gap-2 mb-3">
+                    <input type="text" class="form-control-dark" id="chatTestQuery" placeholder="Enter your message…">
+                    <button class="btn-success-custom" id="chatTestSendBtn" onclick="sendChatTest()">Send</button>
+                    <button class="btn-primary-custom" id="chatTestAbBtn" onclick="runChatTestAB()">A/B Compare</button>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="section-h">Conversation</div>
+                        <div class="log-box chat-box" id="chatTestConversation"></div>
                     </div>
-                    <button type="button" class="btn btn-success mb-3" onclick="loadLanceRows()">Load rows</button>
-                    <div class="table-responsive">
-                        <table class="table table-sm table-dark debug-table" id="lanceTableEl">
-                            <thead><tr><th>#</th><th>preview</th><th>metadata</th><th>vec</th></tr></thead>
-                            <tbody id="lanceRowsBody"></tbody>
-                        </table>
+                    <div class="col-md-6">
+                        <div class="section-h">Last Interaction Details</div>
+                        <div class="log-box chat-box" id="chatTestDetails"></div>
                     </div>
-                    <div id="lanceRowsMeta" class="text-muted small"></div>
+                </div>
+
+                <div class="mt-3">
+                    <button class="btn-outline-custom" type="button" onclick="resetChatTest()">Reset Session</button>
                 </div>
             </div>
         </div>
 
-        <!-- 6. Graph explorer (PostgreSQL) -->
-        <div class="tab-pane fade" id="neo4jPane" role="tabpanel">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Graph explorer</h5>
-                    <p class="text-muted">Keyword match on entity names and relation types (same bounded query as Hybrid GRAPH path). No arbitrary Cypher.</p>
-                    <button type="button" class="btn btn-primary mb-3" onclick="loadNeo4jSummary()">Load graph summary</button>
-                    <pre id="neo4jSummaryOut" class="log-box" style="height:140px;">Click “Load graph summary”.</pre>
-                    <div class="input-group mb-3">
-                        <input type="text" class="form-control" id="neo4jKeywords" placeholder="keywords comma-separated, e.g. 中信, 银行">
-                        <input type="number" class="form-control" id="neo4jLimit" value="40" min="1" max="100" style="max-width:100px;">
-                        <button class="btn btn-success" type="button" onclick="runNeo4jSearch()">Search relationships</button>
+        <!-- ── 5. Vectors ── -->
+        <div class="tab-pane fade" id="pane-vectors" role="tabpanel">
+            <div class="panel">
+                <div class="panel-title">PostgreSQL Vector Store — <code style="font-size:0.85em;color:var(--accent)">kb_embedding</code></div>
+                <div class="panel-sub">Read-only inspection of pgvector embedding rows. Requires <code>DEBUG_DATA_API=true</code> (default).</div>
+
+                <button type="button" class="btn-outline-custom mb-3" onclick="loadLanceSummary()">Refresh Summary</button>
+                <pre class="log-box mb-3" style="height:120px;" id="lanceSummaryOut">Click "Refresh Summary" to load stats.</pre>
+
+                <div class="row g-2 mb-2 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label-sm">Limit</label>
+                        <input class="form-control-dark" id="lanceLimit" type="number" value="20" min="1" max="80">
                     </div>
-                    <div class="table-responsive">
-                        <table class="table table-sm table-dark debug-table">
-                            <thead><tr><th>subject</th><th>predicate</th><th>object</th><th>chunk_id</th><th>source</th></tr></thead>
-                            <tbody id="neo4jRowsBody"></tbody>
-                        </table>
+                    <div class="col-md-2">
+                        <label class="form-label-sm">Offset</label>
+                        <input class="form-control-dark" id="lanceOffset" type="number" value="0" min="0">
                     </div>
-                    <div id="neo4jSearchMeta" class="text-muted small"></div>
+                    <div class="col-md-4">
+                        <label class="form-label-sm">Filter by source</label>
+                        <input class="form-control-dark" id="lanceFilterSource" placeholder="filename contains…">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label-sm">Filter by parent_id</label>
+                        <input class="form-control-dark" id="lanceFilterPid" placeholder="parent_id contains…">
+                    </div>
                 </div>
+                <button type="button" class="btn-success-custom mb-3" onclick="loadLanceRows()">Load Rows</button>
+
+                <div class="table-wrap">
+                    <table class="table table-sm table-dark debug-table" id="lanceTableEl">
+                        <thead><tr><th>#</th><th>Preview</th><th>Metadata</th><th>Vec</th></tr></thead>
+                        <tbody id="lanceRowsBody">
+                            <tr><td colspan="4"><div class="empty-state"><div class="empty-state-icon">&#9711;</div>No rows loaded yet.</div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="lanceRowsMeta" class="mt-1" style="font-size:0.76rem;color:var(--muted);"></div>
             </div>
         </div>
-    </div>
-</div>
+
+        <!-- ── 6. Graph ── -->
+        <div class="tab-pane fade" id="pane-graph" role="tabpanel">
+            <div class="panel">
+                <div class="panel-title">Knowledge Graph Explorer</div>
+                <div class="panel-sub">Keyword search over entity names and relation types. Uses the same bounded query as the Hybrid GRAPH retrieval path — no arbitrary Cypher.</div>
+
+                <button type="button" class="btn-outline-custom mb-3" onclick="loadNeo4jSummary()">Load Graph Summary</button>
+                <pre class="log-box mb-3" style="height:130px;" id="neo4jSummaryOut">Click "Load Graph Summary".</pre>
+
+                <div class="d-flex gap-2 mb-3">
+                    <input type="text" class="form-control-dark" id="neo4jKeywords" placeholder="Keywords, comma-separated — e.g. CITIC, bank">
+                    <input type="number" class="form-control-dark" id="neo4jLimit" value="40" min="1" max="100" style="max-width:90px;">
+                    <button class="btn-success-custom" type="button" onclick="runNeo4jSearch()">Search</button>
+                </div>
+
+                <div class="table-wrap">
+                    <table class="table table-sm table-dark debug-table">
+                        <thead><tr><th>Subject</th><th>Predicate</th><th>Object</th><th>Chunk ID</th><th>Source</th></tr></thead>
+                        <tbody id="neo4jRowsBody">
+                            <tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">&#9711;</div>No results yet.</div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="neo4jSearchMeta" class="mt-1" style="font-size:0.76rem;color:var(--muted);"></div>
+            </div>
+        </div>
+
+    </div><!-- /tab-content -->
+</div><!-- /page-wrap -->
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // --- Upload Logic ---
-    async function uploadFile() {
-        const fileInput = document.getElementById('fileInput');
-        if (fileInput.files.length === 0) {
-            alert('Please select a file!');
+// ── Utilities ──────────────────────────────────────────────────
+function escapeHtml(str) {
+    return String(str)
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+}
+
+const safeRenderer = new marked.Renderer();
+safeRenderer.html = function() { return ''; };
+
+// ── Upload ─────────────────────────────────────────────────────
+const uploadZone = document.getElementById('uploadZone');
+const fileInput  = document.getElementById('fileInput');
+const btnUpload  = document.getElementById('btnUpload');
+
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadZone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f) setSelectedFile(f);
+});
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) setSelectedFile(fileInput.files[0]);
+});
+
+function setSelectedFile(file) {
+    // Sync the real input so FormData works
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+
+    document.getElementById('selectedFileName').textContent = file.name;
+    document.getElementById('selectedFileSize').textContent = formatBytes(file.size);
+    const info = document.getElementById('selectedFileInfo');
+    info.style.display = 'flex';
+    btnUpload.disabled = false;
+}
+
+function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    return (n/1024/1024).toFixed(2) + ' MB';
+}
+
+async function uploadFile() {
+    if (!fileInput.files.length) return;
+    btnUpload.disabled = true;
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    const prog = document.getElementById('progressContainer');
+    const bar  = document.getElementById('progressBar');
+    prog.style.display = 'block';
+    bar.style.width = '5%';
+    bar.classList.remove('complete');
+    document.getElementById('statusText').textContent = 'Uploading…';
+    document.getElementById('progressPct').textContent = '0%';
+
+    try {
+        const response = await fetch('/api/upload', { method: 'POST', body: formData });
+        const data = await response.json();
+        if (!response.ok) {
+            document.getElementById('statusText').textContent = 'Error: ' + (data.detail || response.status);
+            bar.style.width = '100%';
             return;
         }
-
-        const formData = new FormData();
-        formData.append('file', fileInput.files[0]);
-
-        document.getElementById('progressContainer').style.display = 'block';
-        document.getElementById('progressBar').style.width = '0%';
-        document.getElementById('statusText').innerText = 'Status: Uploading...';
-
-        try {
-            const response = await fetch('/api/upload', {
-                method: 'POST',
-                body: formData
-            });
-            const data = await response.json();
-            pollTaskStatus(data.task_id);
-        } catch (err) {
-            alert('Upload failed: ' + err);
-        }
+        pollTaskStatus(data.task_id);
+    } catch (err) {
+        document.getElementById('statusText').textContent = 'Upload failed: ' + err;
     }
+}
 
-    async function pollTaskStatus(taskId) {
-        const interval = setInterval(async () => {
-            const res = await fetch(`/api/tasks/${taskId}`);
+async function pollTaskStatus(taskId) {
+    const bar = document.getElementById('progressBar');
+    const interval = setInterval(async () => {
+        try {
+            const res  = await fetch('/api/tasks/' + taskId);
             const data = await res.json();
-            
-            const bar = document.getElementById('progressBar');
-            bar.style.width = data.progress + '%';
-            bar.innerText = data.progress + '%';
-            document.getElementById('statusText').innerText = `Status: ${data.status}`;
-
+            const pct  = data.progress || 0;
+            bar.style.width = pct + '%';
+            document.getElementById('progressPct').textContent = pct + '%';
+            document.getElementById('statusText').textContent = 'Status: ' + data.status;
             if (data.status === 'completed' || data.status === 'failed') {
                 clearInterval(interval);
-                if (data.status === 'completed') {
-                    bar.classList.remove('progress-bar-animated');
-                    bar.classList.add('bg-success');
-                }
-            }
-        }, 1000);
-    }
-
-    // --- Feedback: summary bar + RAG Chat thumbs (same /api/feedback as /demo) ---
-    var lastConsoleChatQuery = '';
-
-    async function loadFeedbackSummary() {
-        const el = document.getElementById('feedbackSummaryText');
-        if (!el) return;
-        el.innerText = '…';
-        try {
-            const res = await fetch('/api/feedback/summary');
-            const data = await res.json().catch(function () { return {}; });
-            if (!res.ok) {
-                el.innerText = 'Error ' + res.status;
-                return;
-            }
-            const br = data.by_rating || {};
-            const n1 = br['1'];
-            const nm = br['-1'];
-            const z0 = br['0'];
-            el.innerText = 'n=' + (data.n || 0) + ' · 👍 ' + (n1 != null ? n1 : 0)
-                + ' · 👎 ' + (nm != null ? nm : 0) + ' · neutral ' + (z0 != null ? z0 : 0);
-        } catch (e) {
-            el.innerText = String(e);
-        }
-    }
-
-    async function postFeedbackPayload(body) {
-        const res = await fetch('/api/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-        await loadFeedbackSummary();
-        return res.ok;
-    }
-
-    function showConsoleChatFeedback(query) {
-        lastConsoleChatQuery = (query || '').trim();
-        const row = document.getElementById('chatFeedbackRow');
-        const done = document.getElementById('chatFeedbackDone');
-        if (!row) return;
-        if (!lastConsoleChatQuery) {
-            row.style.display = 'none';
-            return;
-        }
-        row.style.display = 'flex';
-        row.classList.add('d-flex');
-        if (done) done.innerText = '';
-        row.querySelectorAll('.fb-console').forEach(function (b) { b.disabled = false; });
-    }
-
-    function hideConsoleChatFeedback() {
-        const row = document.getElementById('chatFeedbackRow');
-        if (row) row.style.display = 'none';
-        lastConsoleChatQuery = '';
-    }
-
-    async function submitConsoleChatFeedback(rating) {
-        if (!lastConsoleChatQuery) return;
-        const row = document.getElementById('chatFeedbackRow');
-        if (row) row.querySelectorAll('.fb-console').forEach(function (b) { b.disabled = true; });
-        const ok = await postFeedbackPayload({
-            query: lastConsoleChatQuery,
-            rating: rating,
-            conversation_id: null,
-            comment: null,
-            tags: ['console', 'rag_chat'],
-        });
-        const done = document.getElementById('chatFeedbackDone');
-        if (done) done.innerText = ok ? '已记录' : '提交失败';
-    }
-
-    function initFeedbackConsoleUi() {
-        loadFeedbackSummary();
-        const btn = document.getElementById('btnFeedbackRefresh');
-        if (btn) btn.addEventListener('click', loadFeedbackSummary);
-        const fr = document.getElementById('chatFeedbackRow');
-        if (fr) {
-            fr.addEventListener('click', function (e) {
-                const b = e.target.closest('.fb-console');
-                if (!b) return;
-                const r = parseInt(b.getAttribute('data-rating'), 10);
-                if (r === 1 || r === -1) submitConsoleChatFeedback(r);
-            });
-        }
-    }
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initFeedbackConsoleUi);
-    } else {
-        initFeedbackConsoleUi();
-    }
-
-    // --- Chat Logic ---
-    function renderChatCitations(citations) {
-        const el = document.getElementById('chatCitations');
-        if (!citations || !citations.length) {
-            el.innerHTML = '';
-            return;
-        }
-        const items = citations.map(function (c) {
-            return '<li class="list-group-item" style="background:rgba(0,0,0,0.25);border-color:rgba(255,255,255,0.1);">'
-                + '<span class="badge bg-secondary me-2">' + (c.index != null ? c.index : '?') + '</span> '
-                + '<span class="text-info">' + escapeHtml(c.label || '') + '</span>'
-                + '<div class="small text-muted mt-1" style="max-height:72px;overflow:auto;">' + escapeHtml(c.preview || '') + '</div></li>';
-        }).join('');
-        el.innerHTML = '<h6 class="mt-3 mb-2">Citations (retrieval transparency)</h6><ul class="list-group list-group-flush">' + items + '</ul>';
-    }
-
-    function renderHybridRouteInfo(data) {
-        const bits = [];
-        if (data.route) bits.push('route=' + data.route);
-        if (data.effective_route) bits.push('effective=' + data.effective_route);
-        if (data.router_reason) bits.push('reason=' + data.router_reason);
-        document.getElementById('chatRouteInfo').innerText = bits.length ? ('Hybrid: ' + bits.join(' | ')) : '';
-    }
-
-    async function sendChat() {
-        const query = document.getElementById('chatQuery').value;
-        if(!query) return;
-
-        document.getElementById('chatLogs').innerHTML = 'Sending query...\n';
-        document.getElementById('chatAnswer').innerHTML = '<div class="spinner-border spinner-border-sm text-info" role="status"></div> 正在量子计算合成中...';
-        document.getElementById('chatCitations').innerHTML = '';
-        document.getElementById('chatRouteInfo').innerText = '';
-        hideConsoleChatFeedback();
-
-        try {
-            const response = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: query })
-            });
-            const data = await response.json();
-            if (!response.ok) {
-                document.getElementById('chatAnswer').innerText = (data && data.detail) ? JSON.stringify(data.detail) : ('HTTP ' + response.status);
-                hideConsoleChatFeedback();
-                return;
-            }
-            document.getElementById('chatLogs').innerHTML = (data.logs || []).join('\n') + '\n\nDone.';
-            document.getElementById('chatAnswer').innerHTML = marked.parse(data.answer);
-            renderHybridRouteInfo(data);
-            renderChatCitations(data.citations || []);
-            showConsoleChatFeedback(query);
-        } catch (err) {
-            document.getElementById('chatAnswer').innerText = 'Error: ' + err;
-            hideConsoleChatFeedback();
-        }
-    }
-
-    async function sendChatStream() {
-        const query = document.getElementById('chatQuery').value;
-        if (!query) return;
-
-        document.getElementById('chatLogs').innerHTML = 'Opening SSE stream...\n';
-        document.getElementById('chatAnswer').innerHTML = '<div class="spinner-border spinner-border-sm text-info" role="status"></div> Streaming…';
-        document.getElementById('chatCitations').innerHTML = '';
-        document.getElementById('chatRouteInfo').innerText = '';
-        hideConsoleChatFeedback();
-
-        try {
-            const response = await fetch('/api/chat/stream', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query: query })
-            });
-            if (!response.ok) {
-                const errBody = await response.json().catch(function () { return {}; });
-                document.getElementById('chatAnswer').innerText = errBody.detail ? JSON.stringify(errBody.detail) : ('HTTP ' + response.status);
-                hideConsoleChatFeedback();
-                return;
-            }
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            var lineBuf = '';
-            var md = '';
-            while (true) {
-                var chunk = await reader.read();
-                if (chunk.done) break;
-                lineBuf += decoder.decode(chunk.value, { stream: true });
-                var lines = lineBuf.split('\n');
-                lineBuf = lines.pop() || '';
-                for (var i = 0; i < lines.length; i++) {
-                    var line = lines[i];
-                    if (line.indexOf('data: ') !== 0) continue;
-                    var payload = line.slice(6).trim();
-                    if (!payload) continue;
-                    var ev;
-                    try { ev = JSON.parse(payload); } catch (e) { continue; }
-                    if (ev.type === 'meta') {
-                        renderChatCitations(ev.citations || []);
-                        var rb = [];
-                        if (ev.route) rb.push('route=' + ev.route);
-                        if (ev.effective_route) rb.push('effective=' + ev.effective_route);
-                        if (ev.router_reason) rb.push('reason=' + ev.router_reason);
-                        document.getElementById('chatRouteInfo').innerText = rb.length ? ('Hybrid: ' + rb.join(' | ')) : '';
-                        if (ev.logs && ev.logs.length) {
-                            document.getElementById('chatLogs').innerHTML = ev.logs.join('\n');
-                        }
-                    } else if (ev.type === 'token') {
-                        md += (ev.text || '');
-                        document.getElementById('chatAnswer').innerHTML = marked.parse(md);
-                    } else if (ev.type === 'done') {
-                        if (ev.answer) {
-                            md = ev.answer;
-                            document.getElementById('chatAnswer').innerHTML = marked.parse(md);
-                        }
-                        document.getElementById('chatLogs').innerHTML += '\n\nStream done.';
-                    } else if (ev.type === 'error') {
-                        throw new Error(ev.detail || 'stream error');
-                    }
-                }
-            }
-            showConsoleChatFeedback(query);
-        } catch (err) {
-            document.getElementById('chatAnswer').innerText = 'Error: ' + err;
-            hideConsoleChatFeedback();
-        }
-    }
-
-    // --- Eval Logic ---
-    function renderEvalMetricsBars(metrics) {
-        const box = document.getElementById('evalMetricsBars');
-        box.innerHTML = '';
-        if (!metrics || typeof metrics !== 'object') return;
-        const row = document.createElement('div');
-        row.className = 'row g-2';
-        const ks = [1, 3, 5, 10];
-        for (const k of ks) {
-            const rk = 'recall@' + k;
-            const nk = 'ndcg@' + k;
-            const rv = Number(metrics[rk]);
-            const nv = Number(metrics[nk]);
-            const col = document.createElement('div');
-            col.className = 'col-md-6 mb-2';
-            col.innerHTML = `
-                <div class="small text-muted">${rk}</div>
-                <div class="metric-bar-wrap"><div class="metric-bar-fill" style="width:${(isFinite(rv) ? rv : 0) * 100}%"></div></div>
-                <div class="small">${isFinite(rv) ? (rv * 100).toFixed(1) : '?'}%</div>
-                <div class="small text-muted">${nk}: ${isFinite(nv) ? nv.toFixed(4) : '?'}</div>`;
-            row.appendChild(col);
-        }
-        box.appendChild(row);
-    }
-
-    async function runEval() {
-        const query = document.getElementById('evalQuery').value;
-        const expected = document.getElementById('evalExpected').value;
-        const useHybrid = document.getElementById('evalUseHybrid').checked;
-        if(!query || !expected) return;
-
-        document.getElementById('evalResults').style.display = 'none';
-
-        try {
-            const response = await fetch('/api/evaluate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    query: query,
-                    expected_substring: expected,
-                    use_hybrid: useHybrid
-                })
-            });
-            const data = await response.json();
-            
-            if(data.error) {
-                alert(data.error); return;
-            }
-
-            document.getElementById('evalResults').style.display = 'block';
-            const routeBits = [];
-            if (data.use_hybrid !== undefined) routeBits.push('use_hybrid=' + data.use_hybrid);
-            if (data.route) routeBits.push('route=' + data.route);
-            if (data.effective_route) routeBits.push('effective_route=' + data.effective_route);
-            document.getElementById('evalRouteInfo').innerText = routeBits.join(' | ') || '(vector-only eval)';
-            document.getElementById('metricsJson').innerText = JSON.stringify({
-                hit_rank: data.hit_rank,
-                hit_rank_0: data.hit_rank_0,
-                metrics: data.metrics,
-                metrics_legacy: data.metrics_legacy
-            }, null, 2);
-            renderEvalMetricsBars(data.metrics);
-            const logs = (data.eval_logs || []).join('\n');
-            document.getElementById('evalLogs').innerText = logs || '(no eval logs)';
-
-            const list = document.getElementById('topDocsList');
-            list.innerHTML = '';
-            (data.top_3_docs || []).forEach((doc, idx) => {
-                const li = document.createElement('li');
-                li.className = 'list-group-item';
-                li.innerText = '[Rank ' + (idx+1) + '] ' + doc;
-                if (doc.toLowerCase().includes(expected.toLowerCase())) {
-                    li.classList.add('list-group-item-success');
-                }
-                list.appendChild(li);
-            });
-
-        } catch (err) {
-            alert('Eval failed: ' + err);
-        }
-    }
-
-    // --- PostgreSQL kb_embedding / graph debug (read-only APIs) ---
-    async function loadLanceSummary() {
-        const el = document.getElementById('lanceSummaryOut');
-        el.innerText = 'Loading...';
-        try {
-            const res = await fetch('/api/debug/pg/kb_embedding/summary');
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                el.innerText = 'Error: ' + (data.detail || res.status);
-                return;
-            }
-            el.innerText = JSON.stringify(data, null, 2);
-        } catch (e) {
-            el.innerText = String(e);
-        }
-    }
-
-    async function loadLanceRows() {
-        const tbody = document.getElementById('lanceRowsBody');
-        const meta = document.getElementById('lanceRowsMeta');
-        tbody.innerHTML = '';
-        meta.innerText = 'Loading...';
-        const params = new URLSearchParams();
-        params.set('limit', document.getElementById('lanceLimit').value || '20');
-        params.set('offset', document.getElementById('lanceOffset').value || '0');
-        const fs = (document.getElementById('lanceFilterSource').value || '').trim();
-        const fp = (document.getElementById('lanceFilterPid').value || '').trim();
-        if (fs) params.set('source', fs);
-        if (fp) params.set('parent_id', fp);
-        try {
-            const res = await fetch('/api/debug/pg/kb_embedding/rows?' + params.toString());
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                meta.innerText = 'Error: ' + (data.detail || res.status);
-                return;
-            }
-            meta.innerText = 'total_after_filter=' + data.total_after_filter +
-                ', truncated_scan=' + (data.truncated_scan ? 'yes (table larger than scan cap)' : 'no');
-            (data.rows || []).forEach((row, i) => {
-                const tr = document.createElement('tr');
-                const md = JSON.stringify(row.metadata || {}, null, 0);
-                const vd = row.has_vector ? 'yes' : '—';
-                tr.innerHTML = '<td>' + (i + 1) + '</td><td><pre style="white-space:pre-wrap;margin:0;color:#ddd;">'
-                    + escapeHtml(row.text_preview || '') + '</pre></td><td><pre style="margin:0;font-size:0.75rem;">'
-                    + escapeHtml(md) + '</pre></td><td>' + escapeHtml(String(vd)) + '</td>';
-                tbody.appendChild(tr);
-            });
-        } catch (e) {
-            meta.innerText = String(e);
-        }
-    }
-
-    async function loadNeo4jSummary() {
-        const el = document.getElementById('neo4jSummaryOut');
-        el.innerText = 'Loading...';
-        try {
-            const res = await fetch('/api/debug/graph/summary');
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                el.innerText = 'Error: ' + (data.detail || res.status);
-                return;
-            }
-            el.innerText = data.summary || '(empty)';
-        } catch (e) {
-            el.innerText = String(e);
-        }
-    }
-
-    async function runNeo4jSearch() {
-        const tbody = document.getElementById('neo4jRowsBody');
-        const meta = document.getElementById('neo4jSearchMeta');
-        tbody.innerHTML = '';
-        meta.innerText = 'Loading...';
-        const raw = (document.getElementById('neo4jKeywords').value || '').trim();
-        const kws = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-        const lim = parseInt(document.getElementById('neo4jLimit').value || '40', 10);
-        try {
-            const res = await fetch('/api/debug/graph/search', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ keywords: kws, limit: lim })
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                meta.innerText = 'Error: ' + (data.detail || res.status);
-                return;
-            }
-            meta.innerText = 'rows=' + (data.count || 0);
-            (data.rows || []).forEach((r) => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = '<td>' + escapeHtml(r.subject || '') + '</td><td>' + escapeHtml(r.predicate || '') +
-                    '</td><td>' + escapeHtml(r.object || '') + '</td><td>' + escapeHtml(r.chunk_id || '') +
-                    '</td><td>' + escapeHtml(r.source || '') + '</td>';
-                tbody.appendChild(tr);
-            });
-        } catch (e) {
-            meta.innerText = String(e);
-        }
-    }
-
-    // --- Chat Test Logic (server-side conversation_id + history) ---
-    const safeRenderer = new marked.Renderer();
-    // Prevent LLM-generated HTML from executing in the browser.
-    safeRenderer.html = function() { return ''; };
-
-    function escapeHtml(str) {
-        return String(str)
-            .replaceAll('&', '&amp;')
-            .replaceAll('<', '&lt;')
-            .replaceAll('>', '&gt;')
-            .replaceAll('"', '&quot;')
-            .replaceAll("'", '&#039;');
-    }
-
-    let chatTestMessages = []; // mirrors server-side history for rendering
-    let chatTestConversationId = null;
-
-    async function resetChatTest() {
-        try {
-            if (chatTestConversationId) {
-                await fetch(`/api/chat/session/${encodeURIComponent(chatTestConversationId)}`, { method: 'DELETE' });
+                if (data.status === 'completed') bar.classList.add('complete');
+                btnUpload.disabled = false;
             }
         } catch (_) {}
-        chatTestConversationId = null;
-        chatTestMessages = [];
-        document.getElementById('chatTestConversation').innerHTML = '';
-        document.getElementById('chatTestDetails').innerHTML = '';
-        document.getElementById('chatTestQuery').value = '';
-    }
+    }, 1000);
+}
 
-    function renderChatTestConversation() {
-        const box = document.getElementById('chatTestConversation');
-        const parts = [];
-        for (const m of chatTestMessages) {
-            const roleLabel = m.role === 'user' ? 'User' : 'Assistant';
-            const content = m.role === 'assistant'
-                ? marked.parse(m.content || '', { renderer: safeRenderer })
-                : escapeHtml(m.content || '');
-            parts.push(`<div style="margin-bottom:14px;">
-                <div style="margin-bottom:4px;"><b>${roleLabel}:</b></div>
-                <div style="white-space: pre-wrap;">${content}</div>
-                <div style="border-bottom:1px solid rgba(255,255,255,0.08); margin-top:10px;"></div>
-            </div>`);
+// ── Feedback summary ───────────────────────────────────────────
+var lastConsoleChatQuery = '';
+
+async function loadFeedbackSummary() {
+    const el = document.getElementById('feedbackSummaryText');
+    el.textContent = '…';
+    try {
+        const res  = await fetch('/api/feedback/summary');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { el.textContent = 'Error ' + res.status; return; }
+        const br = data.by_rating || {};
+        el.innerHTML = '<strong>Feedback</strong> n=' + (data.n || 0)
+            + ' &nbsp;👍 ' + (br['1'] ?? 0)
+            + ' &nbsp;👎 ' + (br['-1'] ?? 0);
+    } catch (e) { el.textContent = String(e); }
+}
+
+async function postFeedbackPayload(body) {
+    const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    await loadFeedbackSummary();
+    return res.ok;
+}
+
+function showConsoleChatFeedback(query) {
+    lastConsoleChatQuery = (query || '').trim();
+    const row  = document.getElementById('chatFeedbackRow');
+    const done = document.getElementById('chatFeedbackDone');
+    if (!row) return;
+    if (!lastConsoleChatQuery) { row.classList.remove('show'); return; }
+    row.classList.add('show');
+    if (done) done.textContent = '';
+    row.querySelectorAll('.fb-console').forEach(b => b.disabled = false);
+}
+function hideConsoleChatFeedback() {
+    document.getElementById('chatFeedbackRow')?.classList.remove('show');
+    lastConsoleChatQuery = '';
+}
+async function submitConsoleChatFeedback(rating) {
+    if (!lastConsoleChatQuery) return;
+    document.getElementById('chatFeedbackRow')?.querySelectorAll('.fb-console').forEach(b => b.disabled = true);
+    const ok   = await postFeedbackPayload({ query: lastConsoleChatQuery, rating, conversation_id: null, comment: null, tags: ['console', 'rag_chat'] });
+    const done = document.getElementById('chatFeedbackDone');
+    if (done) done.textContent = ok ? 'Recorded — thank you' : 'Submit failed';
+}
+
+function initFeedbackConsoleUi() {
+    loadFeedbackSummary();
+    document.getElementById('btnFeedbackRefresh')?.addEventListener('click', loadFeedbackSummary);
+    document.getElementById('chatFeedbackRow')?.addEventListener('click', function(e) {
+        const b = e.target.closest('.fb-console');
+        if (!b) return;
+        const r = parseInt(b.getAttribute('data-rating'), 10);
+        if (r === 1 || r === -1) submitConsoleChatFeedback(r);
+    });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initFeedbackConsoleUi);
+else initFeedbackConsoleUi();
+
+// ── Chat ───────────────────────────────────────────────────────
+function renderChatCitations(citations) {
+    const el = document.getElementById('chatCitations');
+    if (!citations || !citations.length) { el.innerHTML = ''; return; }
+    const items = citations.map(c =>
+        `<div class="citation-item">
+            <div class="ci-label">[${escapeHtml(String(c.index ?? '?'))}] ${escapeHtml(c.label || '')}</div>
+            <div class="ci-preview">${escapeHtml((c.preview || '').slice(0, 300))}</div>
+        </div>`
+    ).join('');
+    el.innerHTML = `<div class="section-h mt-3">Citations</div>${items}`;
+}
+
+function renderHybridRouteInfo(data) {
+    const bits = [];
+    if (data.route) bits.push('route=' + data.route);
+    if (data.effective_route) bits.push('effective=' + data.effective_route);
+    if (data.router_reason) bits.push(data.router_reason);
+    const wrap = document.getElementById('chatRouteWrap');
+    const el   = document.getElementById('chatRouteInfo');
+    if (bits.length) { el.textContent = bits.join(' · '); wrap.style.display = ''; }
+    else { wrap.style.display = 'none'; }
+}
+
+async function sendChat() {
+    const query = document.getElementById('chatQuery').value.trim();
+    if (!query) return;
+    document.getElementById('chatLogs').textContent = 'Sending…';
+    document.getElementById('chatAnswer').innerHTML = '<span class="spinner-sm"></span> Generating answer…';
+    document.getElementById('chatCitations').innerHTML = '';
+    document.getElementById('chatRouteWrap').style.display = 'none';
+    hideConsoleChatFeedback();
+    try {
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            document.getElementById('chatAnswer').textContent = (data && data.detail) ? JSON.stringify(data.detail) : ('HTTP ' + response.status);
+            return;
         }
-        box.innerHTML = parts.join('');
+        document.getElementById('chatLogs').textContent = (data.logs || []).join('\n') + '\n\nDone.';
+        document.getElementById('chatAnswer').innerHTML = marked.parse(data.answer, { renderer: safeRenderer });
+        renderHybridRouteInfo(data);
+        renderChatCitations(data.citations || []);
+        showConsoleChatFeedback(query);
+    } catch (err) {
+        document.getElementById('chatAnswer').textContent = 'Error: ' + err;
+        hideConsoleChatFeedback();
     }
+}
 
-    function renderChatTestDetails(responseData, lastUserMessage) {
-        const box = document.getElementById('chatTestDetails');
-        const requestQuery = responseData.request_query || '';
-
-        const reqInfo = `
-            <div style="margin-bottom:10px;">
-                <b>Request query</b> (len=${(requestQuery || '').length})
-                <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(requestQuery || '')}</pre>
-            </div>
-        `;
-
-        const logs = (responseData.logs || []).map(x => escapeHtml(x)).join('\n');
-        const logsHtml = `
-            <div style="margin-bottom:10px;">
-                <b>Graph logs</b>
-                <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${logs}</pre>
-            </div>
-        `;
-
-        const answerHtml = `
-            <div style="margin-bottom:10px;">
-                <b>Answer</b>
-                <div class="mt-2" style="white-space: pre-wrap;">${marked.parse(responseData.answer || '', { renderer: safeRenderer })}</div>
-            </div>
-        `;
-
-        const contexts = responseData.context_used || [];
-        const ctxParts = contexts.slice(0, 6).map((c, idx) => {
-            return `<div style="margin-bottom:10px;">
-                <div><b>Context ${idx + 1}</b></div>
-                <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(c || '')}</pre>
-            </div>`;
-        }).join('');
-
-        const ctxHtml = `
-            <div style="margin-bottom:10px;">
-                <b>Top contexts (first ${Math.min(6, contexts.length)})</b>
-                ${ctxParts || '<div class="text-muted">No context used.</div>'}
-            </div>
-        `;
-
-        const cites = responseData.citations || [];
-        const citeParts = cites.slice(0, 12).map(function (c) {
-            return '<div style="margin-bottom:6px;"><span class="badge bg-secondary me-1">' + (c.index != null ? c.index : '?') + '</span> '
-                + escapeHtml(c.label || '') + '<div class="small text-muted">' + escapeHtml((c.preview || '').slice(0, 280)) + '</div></div>';
-        }).join('');
-        const citeHtml = `
-            <div style="margin-bottom:10px;">
-                <b>Citations</b>
-                ${citeParts || '<div class="text-muted">No structured citations.</div>'}
-            </div>
-        `;
-
-        box.innerHTML = reqInfo + answerHtml + citeHtml + logsHtml + ctxHtml;
-
-        const um = (lastUserMessage || '').trim();
-        if (um) {
-            const wrap = document.createElement('div');
-            wrap.className = 'mt-2 d-flex flex-wrap align-items-center gap-2';
-            const lbl = document.createElement('span');
-            lbl.className = 'small text-muted';
-            lbl.textContent = 'Rate this turn (memory session):';
-            const b1 = document.createElement('button');
-            b1.type = 'button';
-            b1.className = 'btn btn-sm btn-outline-success';
-            b1.textContent = '👍';
-            const b2 = document.createElement('button');
-            b2.type = 'button';
-            b2.className = 'btn btn-sm btn-outline-warning';
-            b2.textContent = '👎';
-            const done = document.createElement('span');
-            done.className = 'small text-info';
-            wrap.appendChild(lbl);
-            wrap.appendChild(b1);
-            wrap.appendChild(b2);
-            wrap.appendChild(done);
-            box.appendChild(wrap);
-            const cid = responseData.conversation_id || '';
-            b1.addEventListener('click', async function () {
-                b1.disabled = true;
-                b2.disabled = true;
-                const ok = await postFeedbackPayload({
-                    query: um,
-                    rating: 1,
-                    conversation_id: cid || null,
-                    comment: null,
-                    tags: ['console', 'chat_session'],
-                });
-                done.textContent = ok ? '已记录' : '失败';
-            });
-            b2.addEventListener('click', async function () {
-                b1.disabled = true;
-                b2.disabled = true;
-                const ok = await postFeedbackPayload({
-                    query: um,
-                    rating: -1,
-                    conversation_id: cid || null,
-                    comment: null,
-                    tags: ['console', 'chat_session'],
-                });
-                done.textContent = ok ? '已记录' : '失败';
-            });
+async function sendChatStream() {
+    const query = document.getElementById('chatQuery').value.trim();
+    if (!query) return;
+    document.getElementById('chatLogs').textContent = 'Opening SSE stream…';
+    document.getElementById('chatAnswer').innerHTML = '<span class="spinner-sm"></span> Streaming…';
+    document.getElementById('chatCitations').innerHTML = '';
+    document.getElementById('chatRouteWrap').style.display = 'none';
+    hideConsoleChatFeedback();
+    try {
+        const response = await fetch('/api/chat/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query })
+        });
+        if (!response.ok) {
+            const e = await response.json().catch(() => ({}));
+            document.getElementById('chatAnswer').textContent = e.detail ? JSON.stringify(e.detail) : ('HTTP ' + response.status);
+            return;
         }
-    }
-
-    function renderABCompareDetails(data) {
-        const box = document.getElementById('chatTestDetails');
-        const r = data.results || {};
-        const p = r.prioritized || {};
-        const l = r.legacy || {};
-
-        function blockHtml(name, item) {
-            const badge = item.blocked
-                ? '<span class="badge bg-danger">Blocked</span>'
-                : '<span class="badge bg-success">Answered</span>';
-            const q = item.request_query || '';
-            const a = item.answer || '';
-            const cites = item.citations || [];
-            const citeLine = cites.length
-                ? `<div class="small text-muted mb-2">Citations: ${cites.length} snippet(s)</div>`
-                : '';
-            return `
-                <div class="mb-3" style="border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:10px;">
-                    <div><b>${name}</b> ${badge}</div>
-                    <div class="text-muted">query_len=${q.length}</div>
-                    ${citeLine}
-                    <div style="margin-top:6px;"><b>Request Query</b></div>
-                    <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(q)}</pre>
-                    <div><b>Answer (preview)</b></div>
-                    <pre style="white-space: pre-wrap;background: #0b0b10; padding:10px;border-radius:6px;color:#e9e9ff;">${escapeHtml(a.slice(0, 300))}</pre>
-                </div>
-            `;
-        }
-
-        box.innerHTML = `
-            <div class="mb-3"><b>A/B Recommended:</b> <span class="badge bg-info text-dark">${escapeHtml(data.recommended_mode || 'prioritized')}</span></div>
-            ${blockHtml('prioritized', p)}
-            ${blockHtml('legacy', l)}
-        `;
-    }
-
-    async function runChatTestAB() {
-        const btn = document.getElementById('chatTestAbBtn');
-        btn.disabled = true;
-        try {
-            const input = document.getElementById('chatTestQuery');
-            const userMsg = (input.value || '').trim();
-            if (!userMsg) return;
-            document.getElementById('chatTestDetails').innerHTML = '<div class="text-muted">Running A/B compare...</div>';
-
-            const response = await fetch('/api/chat/session/ab', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    conversation_id: chatTestConversationId,
-                    message: userMsg
-                })
-            });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                const msg = data && data.detail ? data.detail : ('HTTP ' + response.status);
-                document.getElementById('chatTestDetails').innerHTML =
-                    `<div class="alert alert-warning">A/B compare failed: ${escapeHtml(msg)}</div>`;
-                return;
+        const reader  = response.body.getReader();
+        const decoder = new TextDecoder();
+        var lineBuf = '', md = '';
+        while (true) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            lineBuf += decoder.decode(chunk.value, { stream: true });
+            var lines = lineBuf.split('\n');
+            lineBuf = lines.pop() || '';
+            for (var line of lines) {
+                if (line.indexOf('data: ') !== 0) continue;
+                var payload = line.slice(6).trim();
+                if (!payload) continue;
+                var ev; try { ev = JSON.parse(payload); } catch (e) { continue; }
+                if (ev.type === 'meta') {
+                    renderChatCitations(ev.citations || []);
+                    renderHybridRouteInfo(ev);
+                    if (ev.logs && ev.logs.length) document.getElementById('chatLogs').textContent = ev.logs.join('\n');
+                } else if (ev.type === 'token') {
+                    md += (ev.text || '');
+                    document.getElementById('chatAnswer').innerHTML = marked.parse(md, { renderer: safeRenderer });
+                } else if (ev.type === 'done') {
+                    if (ev.answer) { md = ev.answer; document.getElementById('chatAnswer').innerHTML = marked.parse(md, { renderer: safeRenderer }); }
+                    document.getElementById('chatLogs').textContent += '\n\nStream complete.';
+                } else if (ev.type === 'error') {
+                    throw new Error(ev.detail || 'stream error');
+                }
             }
-            // Keep the same conversation id for user's next normal send.
-            chatTestConversationId = data.conversation_id || chatTestConversationId;
-            renderABCompareDetails(data);
-        } catch (err) {
-            document.getElementById('chatTestDetails').innerHTML =
-                `<div class="alert alert-warning">A/B compare error: ${escapeHtml(err && err.message ? err.message : err)}</div>`;
-        } finally {
-            btn.disabled = false;
         }
+        showConsoleChatFeedback(query);
+    } catch (err) {
+        document.getElementById('chatAnswer').textContent = 'Error: ' + err;
+        hideConsoleChatFeedback();
     }
+}
 
-    async function sendChatTest() {
-        const btn = document.getElementById('chatTestSendBtn');
-        btn.disabled = true;
-        try {
-            const input = document.getElementById('chatTestQuery');
-            const userMsg = (input.value || '').trim();
-            if (!userMsg) return;
-            input.value = '';
-            document.getElementById('chatTestDetails').innerHTML = '<div class="text-muted">Sending request...</div>';
+// ── Evaluation ─────────────────────────────────────────────────
+function renderEvalMetricsBars(metrics) {
+    const box = document.getElementById('evalMetricsBars');
+    box.innerHTML = '';
+    if (!metrics || typeof metrics !== 'object') return;
+    for (const k of [1, 3, 5, 10]) {
+        const rv = Number(metrics['recall@' + k]);
+        const nv = Number(metrics['ndcg@' + k]);
+        const col = document.createElement('div');
+        col.className = 'col-6 col-md-3';
+        col.innerHTML = `<div class="metric-card">
+            <div class="metric-label">Recall@${k}</div>
+            <div class="metric-track"><div class="metric-fill" style="width:${(isFinite(rv)?rv:0)*100}%"></div></div>
+            <div class="metric-val">${isFinite(rv)?(rv*100).toFixed(1):'?'}%</div>
+            <div class="metric-label mt-1">NDCG@${k}: ${isFinite(nv)?nv.toFixed(4):'?'}</div>
+        </div>`;
+        box.appendChild(col);
+    }
+}
 
-            const response = await fetch('/api/chat/session', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    conversation_id: chatTestConversationId,
-                    message: userMsg
-                })
-            });
+async function runEval() {
+    const query    = document.getElementById('evalQuery').value.trim();
+    const expected = document.getElementById('evalExpected').value.trim();
+    const useHybrid = document.getElementById('evalUseHybrid').checked;
+    if (!query || !expected) return;
+    document.getElementById('evalResults').style.display = 'none';
+    try {
+        const response = await fetch('/api/evaluate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, expected_substring: expected, use_hybrid: useHybrid })
+        });
+        const data = await response.json();
+        if (data.error) { alert(data.error); return; }
+        document.getElementById('evalResults').style.display = 'block';
+        const bits = [];
+        if (data.use_hybrid !== undefined) bits.push('use_hybrid=' + data.use_hybrid);
+        if (data.route) bits.push('route=' + data.route);
+        if (data.effective_route) bits.push('effective_route=' + data.effective_route);
+        document.getElementById('evalRouteInfo').textContent = bits.join(' · ') || '(vector-only)';
+        document.getElementById('metricsJson').textContent = JSON.stringify({ hit_rank: data.hit_rank, hit_rank_0: data.hit_rank_0, metrics: data.metrics, metrics_legacy: data.metrics_legacy }, null, 2);
+        renderEvalMetricsBars(data.metrics);
+        document.getElementById('evalLogs').textContent = (data.eval_logs || []).join('\n') || '(no eval logs)';
+        const list = document.getElementById('topDocsList');
+        list.innerHTML = '';
+        (data.top_3_docs || []).forEach((doc, idx) => {
+            const div = document.createElement('div');
+            const isHit = doc.toLowerCase().includes(expected.toLowerCase());
+            div.className = 'hit-item' + (isHit ? ' hit' : '');
+            div.textContent = '[Rank ' + (idx + 1) + '] ' + doc;
+            list.appendChild(div);
+        });
+    } catch (err) { alert('Eval failed: ' + err); }
+}
 
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                const msg = data && data.detail ? data.detail : ('HTTP ' + response.status);
-                document.getElementById('chatTestDetails').innerHTML =
-                    `<div class="alert alert-warning">Chat failed: ${escapeHtml(msg)}</div>`;
-                return;
-            }
+// ── PostgreSQL / Graph debug ────────────────────────────────────
+async function loadLanceSummary() {
+    const el = document.getElementById('lanceSummaryOut');
+    el.textContent = 'Loading…';
+    try {
+        const res  = await fetch('/api/debug/pg/kb_embedding/summary');
+        const data = await res.json().catch(() => ({}));
+        el.textContent = res.ok ? JSON.stringify(data, null, 2) : 'Error: ' + (data.detail || res.status);
+    } catch (e) { el.textContent = String(e); }
+}
 
+async function loadLanceRows() {
+    const tbody = document.getElementById('lanceRowsBody');
+    const meta  = document.getElementById('lanceRowsMeta');
+    tbody.innerHTML = '';
+    meta.textContent = 'Loading…';
+    const params = new URLSearchParams({
+        limit:  document.getElementById('lanceLimit').value || '20',
+        offset: document.getElementById('lanceOffset').value || '0',
+    });
+    const fs = (document.getElementById('lanceFilterSource').value || '').trim();
+    const fp = (document.getElementById('lanceFilterPid').value || '').trim();
+    if (fs) params.set('source', fs);
+    if (fp) params.set('parent_id', fp);
+    try {
+        const res  = await fetch('/api/debug/pg/kb_embedding/rows?' + params);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { meta.textContent = 'Error: ' + (data.detail || res.status); return; }
+        meta.textContent = 'total_after_filter=' + data.total_after_filter + (data.truncated_scan ? ' (scan capped)' : '');
+        if (!(data.rows || []).length) {
+            tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state"><div class="empty-state-icon">&#9711;</div>No rows match.</div></td></tr>';
+            return;
+        }
+        (data.rows || []).forEach((row, i) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = '<td>' + (i + 1) + '</td>'
+                + '<td><pre style="white-space:pre-wrap;margin:0;font-size:0.75rem;color:#cbd5e1;">' + escapeHtml(row.text_preview || '') + '</pre></td>'
+                + '<td><pre style="margin:0;font-size:0.72rem;color:var(--muted);">' + escapeHtml(JSON.stringify(row.metadata || {}, null, 0)) + '</pre></td>'
+                + '<td>' + (row.has_vector ? '<span style="color:var(--success)">✓</span>' : '—') + '</td>';
+            tbody.appendChild(tr);
+        });
+    } catch (e) { meta.textContent = String(e); }
+}
+
+async function loadNeo4jSummary() {
+    const el = document.getElementById('neo4jSummaryOut');
+    el.textContent = 'Loading…';
+    try {
+        const res  = await fetch('/api/debug/graph/summary');
+        const data = await res.json().catch(() => ({}));
+        el.textContent = res.ok ? (data.summary || '(empty)') : 'Error: ' + (data.detail || res.status);
+    } catch (e) { el.textContent = String(e); }
+}
+
+async function runNeo4jSearch() {
+    const tbody = document.getElementById('neo4jRowsBody');
+    const meta  = document.getElementById('neo4jSearchMeta');
+    tbody.innerHTML = '';
+    meta.textContent = 'Loading…';
+    const raw = (document.getElementById('neo4jKeywords').value || '').trim();
+    const kws = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+    const lim = parseInt(document.getElementById('neo4jLimit').value || '40', 10);
+    try {
+        const res  = await fetch('/api/debug/graph/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keywords: kws, limit: lim }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { meta.textContent = 'Error: ' + (data.detail || res.status); return; }
+        meta.textContent = 'rows=' + (data.count || 0);
+        if (!(data.rows || []).length) {
+            tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">&#9711;</div>No results.</div></td></tr>';
+            return;
+        }
+        (data.rows || []).forEach(r => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = ['subject','predicate','object','chunk_id','source'].map(k => '<td>' + escapeHtml(r[k] || '') + '</td>').join('');
+            tbody.appendChild(tr);
+        });
+    } catch (e) { meta.textContent = String(e); }
+}
+
+// ── Chat Test ──────────────────────────────────────────────────
+let chatTestMessages = [];
+let chatTestConversationId = null;
+
+async function resetChatTest() {
+    if (chatTestConversationId) {
+        try { await fetch('/api/chat/session/' + encodeURIComponent(chatTestConversationId), { method: 'DELETE' }); } catch (_) {}
+    }
+    chatTestConversationId = null;
+    chatTestMessages = [];
+    document.getElementById('chatTestConversation').innerHTML = '';
+    document.getElementById('chatTestDetails').innerHTML = '';
+    document.getElementById('chatTestQuery').value = '';
+}
+
+function renderChatTestConversation() {
+    const box = document.getElementById('chatTestConversation');
+    box.innerHTML = chatTestMessages.map(m => {
+        const label   = m.role === 'user' ? 'You' : 'Assistant';
+        const content = m.role === 'assistant'
+            ? marked.parse(m.content || '', { renderer: safeRenderer })
+            : escapeHtml(m.content || '');
+        return `<div style="margin-bottom:14px;"><b style="color:${m.role==='user'?'#7dd3fc':'#86efac'}">${label}</b><div style="margin-top:4px;white-space:pre-wrap;">${content}</div><div style="border-bottom:1px solid rgba(255,255,255,0.07);margin-top:10px;"></div></div>`;
+    }).join('');
+    box.scrollTop = box.scrollHeight;
+}
+
+function renderChatTestDetails(responseData, lastUserMessage) {
+    const box = document.getElementById('chatTestDetails');
+    box.innerHTML = `<div style="margin-bottom:10px;"><b style="color:#7dd3fc">Request</b><br><span style="color:var(--muted);font-size:0.78rem;">query:</span> ${escapeHtml(lastUserMessage)}</div>`
+        + `<div style="margin-bottom:10px;"><b style="color:#86efac">Session</b><br><span style="font-size:0.78rem;color:var(--muted);">${escapeHtml(responseData.conversation_id||'—')}</span></div>`
+        + `<div style="margin-bottom:6px;"><b style="color:#c4b5fd">Memory mode</b><br><span style="font-size:0.78rem;">${escapeHtml(responseData.memory_mode||'—')}</span></div>`
+        + (responseData.logs ? `<div style="margin-top:8px;"><b style="color:#fbbf24">Logs</b><pre style="font-size:0.72rem;color:#7dd3fc;white-space:pre-wrap;margin:4px 0 0;">${escapeHtml((responseData.logs||[]).join('\n'))}</pre></div>` : '');
+    box.scrollTop = box.scrollHeight;
+}
+
+async function sendChatTest() {
+    const query = document.getElementById('chatTestQuery').value.trim();
+    if (!query) return;
+    document.getElementById('chatTestSendBtn').disabled = true;
+    chatTestMessages.push({ role: 'user', content: query });
+    renderChatTestConversation();
+    document.getElementById('chatTestQuery').value = '';
+    try {
+        const res  = await fetch('/api/chat/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ conversation_id: chatTestConversationId, message: query, memory_mode: 'prioritized' }),
+        });
+        const data = await res.json();
+        if (res.ok) {
             chatTestConversationId = data.conversation_id || chatTestConversationId;
-            chatTestMessages = Array.isArray(data.history) ? data.history : chatTestMessages;
+            chatTestMessages.push({ role: 'assistant', content: data.answer || '' });
             renderChatTestConversation();
-            renderChatTestDetails(data, userMsg);
-        } catch (err) {
-            document.getElementById('chatTestDetails').innerHTML =
-                `<div class="alert alert-warning">Error: ${escapeHtml(err && err.message ? err.message : err)}</div>`;
-        } finally {
-            btn.disabled = false;
+            renderChatTestDetails(data, query);
+        } else {
+            chatTestMessages.push({ role: 'assistant', content: '[Error: ' + (data.detail || res.status) + ']' });
+            renderChatTestConversation();
         }
+    } catch (e) {
+        chatTestMessages.push({ role: 'assistant', content: '[Network error: ' + e + ']' });
+        renderChatTestConversation();
+    } finally {
+        document.getElementById('chatTestSendBtn').disabled = false;
     }
+}
+
+async function runChatTestAB() {
+    const query = document.getElementById('chatTestQuery').value.trim();
+    if (!query) { alert('Enter a message first.'); return; }
+    document.getElementById('chatTestAbBtn').disabled = true;
+    document.getElementById('chatTestDetails').textContent = 'Running A/B comparison…';
+    try {
+        const [ra, rb] = await Promise.all([
+            fetch('/api/chat/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: query, memory_mode: 'prioritized' }) }),
+            fetch('/api/chat/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: query, memory_mode: 'compact' }) }),
+        ]);
+        const [da, db] = await Promise.all([ra.json(), rb.json()]);
+        document.getElementById('chatTestDetails').innerHTML =
+            `<b style="color:#7dd3fc">A (prioritized)</b><pre style="white-space:pre-wrap;font-size:0.78rem;margin:4px 0 12px;">${escapeHtml(da.answer||'')}</pre>`
+            + `<b style="color:#86efac">B (compact)</b><pre style="white-space:pre-wrap;font-size:0.78rem;margin:4px 0;">${escapeHtml(db.answer||'')}</pre>`;
+    } catch (e) { document.getElementById('chatTestDetails').textContent = 'Error: ' + e; }
+    finally { document.getElementById('chatTestAbBtn').disabled = false; }
+}
 </script>
 </body>
 </html>

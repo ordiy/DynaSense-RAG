@@ -30,11 +30,19 @@ def prepare_connection(conn) -> None:
     try:
         conn.execute("LOAD 'age'")
     except Exception:
-        pass
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return  # AGE not installed; skip search_path setup
     try:
         conn.execute("SET search_path = ag_catalog, public")
     except Exception as e:
         logger.debug("AGE search_path: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 def ensure_age_extension_and_graph(pool, graph_name: str) -> bool:

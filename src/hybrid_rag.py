@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Iterator, Literal
 
@@ -34,8 +35,8 @@ from src.graph_store import (
 from src.core.query_anchors import filter_documents_by_query_anchors
 from src.rag_core import (
     AgentState,
+    _is_analysis_query,
     collection,
-    generate_node,
     grade_documents_node,
     invoke_rag_app,
     jina_rerank,
@@ -47,10 +48,46 @@ from src.rag_core import (
 
 logger = logging.getLogger(__name__)
 
-HYBRID_RAG_ENABLED = os.environ.get("HYBRID_RAG_ENABLED", "true").lower() in ("1", "true", "yes")
-FUSION_TOP_N = int(os.environ.get("HYBRID_FUSION_TOP_N", "5"))
-BM25_TOP_CHILD = int(os.environ.get("HYBRID_BM25_TOP_CHILD", "12"))
-DENSE_K = int(os.environ.get("HYBRID_DENSE_K", "10"))
+# ---------------------------------------------------------------------------
+# BM25 index cache — built once from all child chunks, invalidated on ingest.
+# ---------------------------------------------------------------------------
+_bm25_cache: tuple[list[dict], Any] | None = None  # (children_list, BM25Okapi)
+_bm25_lock = threading.Lock()
+
+
+def invalidate_bm25_cache() -> None:
+    """Drop the cached BM25 index so the next query rebuilds it from fresh data."""
+    global _bm25_cache
+    with _bm25_lock:
+        _bm25_cache = None
+    logger.debug("BM25 cache invalidated.")
+
+
+def _get_or_build_bm25() -> tuple[list[dict], Any] | None:
+    """
+    Return the cached (children, BM25Okapi) pair, building it on first call.
+    Thread-safe double-checked locking.
+    """
+    global _bm25_cache
+    if _bm25_cache is not None:
+        return _bm25_cache
+    with _bm25_lock:
+        if _bm25_cache is not None:
+            return _bm25_cache
+        try:
+            from rank_bm25 import BM25Okapi
+        except ImportError:
+            logger.warning("BM25: rank_bm25 not installed; skipping.")
+            return None
+        children = list(collection.find({"type": "child"}))
+        if not children:
+            return None
+        tokenized = [_tokenize(str(c.get("content", ""))) for c in children]
+        if not any(tokenized):
+            return None
+        _bm25_cache = (children, BM25Okapi(tokenized))
+        logger.debug("BM25 index built: %d child chunks.", len(children))
+        return _bm25_cache
 
 
 class RouteDecision(BaseModel):
@@ -165,46 +202,70 @@ def extract_triples_from_text(text: str) -> list[TripleItem]:
 
 
 def ingest_chunks_to_graph(chunks: list[str], chunk_ids: list[str], source: str) -> int:
-    """Offline: LLM triple extraction + merge into PostgreSQL graph. Returns number of triples written."""
+    """
+    Offline: LLM triple extraction + merge into PostgreSQL graph.
+
+    Triple extraction is I/O-bound (LLM calls), so chunks are processed in parallel
+    using a bounded thread pool (max 5 workers) to respect Vertex AI rate limits
+    while cutting ingestion time by ~5×. Returns total triples written.
+    """
     if not get_driver():
         return 0
-    n = 0
-    for ch, cid in zip(chunks, chunk_ids):
+
+    def _extract_for_chunk(ch: str, cid: str) -> list[tuple[str, str, str, str]]:
+        """Extract triples for one chunk; returns list of (subj, pred, obj, cid)."""
+        results = []
         for t in extract_triples_from_text(ch):
+            results.append((t.subject, t.predicate, t.object, cid))
+        return results
+
+    all_triples: list[tuple[str, str, str, str]] = []
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {
+            pool.submit(_extract_for_chunk, ch, cid): cid
+            for ch, cid in zip(chunks, chunk_ids)
+        }
+        for fut in as_completed(futures):
             try:
-                merge_triple(t.subject, t.predicate, t.object, cid, source)
-                n += 1
+                all_triples.extend(fut.result())
             except Exception as e:
-                logger.debug("merge_triple skip: %s", e)
+                logger.warning("Triple extraction failed for chunk %s: %s", futures[fut], e)
+
+    n = 0
+    for subj, pred, obj, cid in all_triples:
+        try:
+            merge_triple(subj, pred, obj, cid, source)
+            n += 1
+        except Exception as e:
+            logger.debug("merge_triple skip: %s", e)
+
+    # New child docs were added — invalidate the BM25 cache so the next query sees them.
+    invalidate_bm25_cache()
     return n
 
 
-def bm25_parent_documents(question: str, top_child: int = BM25_TOP_CHILD) -> tuple[list[Document], list[str]]:
+def bm25_parent_documents(question: str, top_child: int | None = None) -> tuple[list[Document], list[str]]:
+    from src.core.config import get_settings
+
+    if top_child is None:
+        top_child = get_settings().hybrid_bm25_top_child
     logs: list[str] = []
     qtok = _tokenize(question)
     if not qtok:
         return [], ["BM25: empty query tokens; skipping."]
-    children = list(collection.find({"type": "child"}))
-    if not children:
-        return [], ["BM25: no child chunks in store."]
-    try:
-        from rank_bm25 import BM25Okapi
-    except ImportError:
-        return [], ["BM25: rank_bm25 not installed; skipping."]
 
-    corpus_texts = [str(c.get("content", "")) for c in children]
-    meta = children
-    tokenized = [_tokenize(t) for t in corpus_texts]
-    if not any(tokenized):
-        return [], ["BM25: empty tokenized corpus."]
-    bm25 = BM25Okapi(tokenized)
+    cached = _get_or_build_bm25()
+    if cached is None:
+        return [], ["BM25: no child chunks in store or rank_bm25 unavailable."]
+
+    children, bm25 = cached
     scores = bm25.get_scores(qtok)
     ranked_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_child]
 
     parent_ids_ordered: list[str] = []
     seen: set[str] = set()
     for i in ranked_idx:
-        pid = meta[i].get("parent_id")
+        pid = children[i].get("parent_id")
         if pid and pid not in seen:
             seen.add(pid)
             parent_ids_ordered.append(pid)
@@ -268,29 +329,43 @@ def global_context_documents(question: str) -> tuple[list[Document], list[str]]:
 
 
 def fusion_rerank_docs(
-    question: str, candidates: list[Document], top_n: int = FUSION_TOP_N
+    question: str, candidates: list[Document], top_n: int | None = None
 ) -> tuple[list[Document], list[str]]:
     """Deduplicate, optional anchor filter, cap pool, Jina cross-encoder rerank; returns ranked Documents."""
+    from src.core.config import get_settings
+
+    s = get_settings()
+    if top_n is None:
+        top_n = s.hybrid_fusion_top_n
+    pool_size = s.hybrid_rerank_pool_size
+
     logs: list[str] = []
     cand = _dedupe_docs(candidates)
     if not cand:
         return [], ["Fusion: no candidates."]
     cand, alogs = filter_documents_by_query_anchors(question, cand)
     logs.extend(alogs)
-    pool = cand[:40]
+    if len(cand) > pool_size:
+        logs.append(
+            f"Fusion: truncating candidate pool from {len(cand)} to {pool_size} "
+            f"(hybrid_rerank_pool_size). Increase setting to pass more to reranker."
+        )
+    pool = cand[:pool_size]
     logs.append(f"Fusion+rerank: pool_size={len(pool)} -> top_n={top_n}")
     ranked = jina_rerank(question, pool, top_n=top_n)
     return ranked, logs
 
 
-def fusion_rerank_all(question: str, candidates: list[Document], top_n: int = FUSION_TOP_N) -> tuple[list[str], list[str]]:
+def fusion_rerank_all(question: str, candidates: list[Document], top_n: int | None = None) -> tuple[list[str], list[str]]:
     ranked, logs = fusion_rerank_docs(question, candidates, top_n=top_n)
     return [d.page_content for d in ranked], logs
 
 
 def collect_vector_path(question: str) -> tuple[list[Document], list[str]]:
+    from src.core.config import get_settings
+
     logs: list[str] = []
-    dense_docs, dl = retrieve_parent_documents_expanded(question, dense_k=DENSE_K)
+    dense_docs, dl = retrieve_parent_documents_expanded(question, dense_k=get_settings().hybrid_dense_k)
     logs.extend(dl)
     bm_docs, bl = bm25_parent_documents(question)
     logs.extend(bl)
@@ -392,7 +467,7 @@ def prepare_hybrid_chat(question: str) -> HybridPrepared | dict[str, Any]:
     candidates, sub = gather_route_candidates(question, effective_route)
     logs.extend(sub)
 
-    final_texts, flogs = fusion_rerank_all(question, candidates, top_n=FUSION_TOP_N)
+    final_texts, flogs = fusion_rerank_all(question, candidates)
     logs.extend(flogs)
 
     if not final_texts:
@@ -405,16 +480,18 @@ def prepare_hybrid_chat(question: str) -> HybridPrepared | dict[str, Any]:
             "router_reason": decision.reason,
         }
 
+    is_analysis = _is_analysis_query(question)
     state: AgentState = {
         "question": question,
         "documents": final_texts,
+        "is_analysis": is_analysis,
         "generation": "",
         "loop_count": 0,
         "logs": logs,
     }
     if langgraph_stream_log_enabled():
         logger.info(
-            "[Hybrid pipeline] grade+generate (manual nodes, not full LangGraph) | candidates=%s",
+            "[Hybrid pipeline] grading (manual node) | candidates=%s",
             len(final_texts),
         )
     state.update(grade_documents_node(state))
@@ -428,26 +505,40 @@ def prepare_hybrid_chat(question: str) -> HybridPrepared | dict[str, Any]:
 
 def run_hybrid_chat_pipeline(question: str) -> dict[str, Any]:
     """
-    End-to-end hybrid retrieval -> grade -> generate.
-    Returns same shape as rag_core.run_chat_pipeline legacy.
+    End-to-end hybrid retrieval → grade → generate.
+
+    Uses the same compiled ``rag_app`` LangGraph as the vector-only path so that
+    grade and generate nodes are shared.  The hybrid retrieval result is injected
+    into ``AgentState`` with ``skip_retrieval=True``; the retrieve node detects this
+    and skips vector search, then the graph continues normally through grade → generate.
+
+    Returns the same shape as ``rag_core.run_chat_pipeline`` (legacy key set).
     """
     prepared = prepare_hybrid_chat(question)
     if isinstance(prepared, dict):
         return prepared
 
-    state = prepared.state
-    state.update(generate_node(state))
+    # prepared.state already has graded documents from prepare_hybrid_chat.
+    # Feed it back into the full graph with skip_retrieval=True so that the
+    # retrieve node is a no-op and grade/generate run through the unified path.
+    pre_state = prepared.state
+    unified_state: AgentState = {
+        **pre_state,  # type: ignore[arg-type]
+        "skip_retrieval": True,
+    }
+    result = invoke_rag_app(unified_state)
+
     if langgraph_stream_log_enabled():
         logger.info(
-            "[Hybrid pipeline] after generate | answer_chars=%s",
-            len((state.get("generation") or "")),
+            "[Hybrid pipeline] after generate (unified rag_app) | answer_chars=%s",
+            len((result.get("generation") or "")),
         )
     decision = prepared.decision
     effective_route = prepared.effective_route
     return {
-        "answer": state.get("generation", ""),
-        "context_used": state.get("documents", []),
-        "logs": state.get("logs", []),
+        "answer": result.get("generation", ""),
+        "context_used": result.get("documents", []),
+        "logs": result.get("logs", []),
         "route": decision.route,
         "effective_route": effective_route,
         "router_reason": decision.reason,
@@ -494,7 +585,7 @@ def iter_hybrid_chat_stream_events(question: str) -> Iterator[dict[str, Any]]:
         yield {"type": "done", "answer": blocked}
         return
     parts: list[str] = []
-    for piece in stream_generation_chunks(question, docs):
+    for piece in stream_generation_chunks(question, docs, is_analysis=state.get("is_analysis")):
         parts.append(piece)
         yield {"type": "token", "text": piece}
     yield {"type": "done", "answer": "".join(parts)}

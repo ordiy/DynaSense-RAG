@@ -10,10 +10,17 @@ from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
 from src.api import state
 from src.api.state import cleanup_tasks as _cleanup_tasks
-from src.api.upload_validation import is_allowed_text_upload, is_pdf_upload
+from src.api.upload_validation import (
+    is_allowed_text_upload,
+    is_docx_upload,
+    is_pdf_upload,
+    is_xlsx_upload,
+)
 from src.core.config import get_settings
+from src.docx_extract import DocxExtractError, extract_text_from_docx_bytes
 from src.pdf_extract import PdfExtractError, extract_text_from_pdf_bytes
 from src.rag_core import process_document_task
+from src.xlsx_extract import XlsxExtractError, extract_text_from_xlsx_bytes
 
 router = APIRouter(prefix="/api", tags=["ingest"])
 
@@ -42,17 +49,39 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
                 ),
             )
         ingest_format = "pdf"
-    else:
-        if not is_allowed_text_upload(file.filename):
+    elif is_docx_upload(file.filename, file.content_type):
+        try:
+            text_content = extract_text_from_docx_bytes(content)
+        except DocxExtractError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if not text_content.strip():
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "For non-PDF uploads, use a .txt, .md, or .markdown filename, "
-                    "or upload a .pdf file."
-                ),
+                detail="No extractable text found in DOCX (document appears to be empty).",
             )
+        ingest_format = "docx"
+    elif is_xlsx_upload(file.filename, file.content_type):
+        try:
+            text_content = extract_text_from_xlsx_bytes(content)
+        except XlsxExtractError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if not text_content.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="No extractable data found in XLSX (all sheets appear to be empty).",
+            )
+        ingest_format = "xlsx"
+    elif is_allowed_text_upload(file.filename):
         text_content = content.decode("utf-8", errors="replace")
         ingest_format = "text"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unsupported file type. Upload a .pdf, .docx, .xlsx, "
+                ".txt, .md, or .markdown file."
+            ),
+        )
 
     task_id = str(uuid.uuid4())
     state.tasks[task_id] = {

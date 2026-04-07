@@ -2,10 +2,13 @@
 FastAPI application factory.
 
 LangSmith **must** initialize before ``rag_core`` / LangChain imports used by routers.
+Storage (PostgreSQL pool) is initialised in the lifespan handler so the module can be
+imported safely in unit-test environments that have no live database.
 """
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -30,8 +33,30 @@ from src.api.routers import (  # noqa: E402
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: initialise PostgreSQL pool + RAG storage. Shutdown: close pool."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        from src.rag_core import setup_storage
+
+        setup_storage()
+    except Exception as exc:
+        logger.warning("Storage init failed at startup: %s", exc)
+    yield
+    try:
+        from src.infrastructure.persistence.postgres_connection import close_pool
+
+        close_pool()
+        logger.info("PostgreSQL connection pool closed.")
+    except Exception as exc:
+        logger.debug("Pool close on shutdown: %s", exc)
+
+
 def create_app() -> FastAPI:
-    application = FastAPI(title="MAP-RAG MVP API")
+    application = FastAPI(title="MAP-RAG MVP API", lifespan=lifespan)
     register_exception_handlers(application)
     os.makedirs(STATIC_DIR, exist_ok=True)
     application.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

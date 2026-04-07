@@ -41,18 +41,18 @@ class PostgresJsonbDocCollection:
             conn.commit()
 
     def insert_many(self, docs: list[dict[str, Any]]) -> None:
+        params = [(d["id"], Json(d)) for d in docs if d.get("id")]
+        if not params:
+            return
         with self._pool.connection() as conn:
-            for d in docs:
-                did = d.get("id")
-                if not did:
-                    continue
-                conn.execute(
+            with conn.cursor() as cur:
+                cur.executemany(
                     """
                     INSERT INTO kb_doc (id, doc)
                     VALUES (%s, %s)
                     ON CONFLICT (id) DO UPDATE SET doc = EXCLUDED.doc
                     """,
-                    (did, Json(d)),
+                    params,
                 )
             conn.commit()
 

@@ -26,8 +26,6 @@ from src.core.rag_context_format import format_numbered_passages
 
 import logging
 
-# Configure basic logging for debugging
-logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
@@ -39,7 +37,6 @@ JINA_MAX_RETRIES = 3
 
 # --- Embeddings / LLM (shared by all storage backends) ---
 doc_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
-query_embeddings = VertexAIEmbeddings(model_name="text-embedding-004")
 llm = ChatVertexAI(model_name="gemini-2.5-flash", temperature=0)
 
 # Populated by ``_setup_storage()`` — PostgreSQL only.
@@ -68,13 +65,25 @@ def _init_postgres_storage() -> None:
     vectorstore = PostgresVectorStore(get_pool(), doc_embeddings)
 
 
-def _setup_storage() -> None:
-    """Initialize unified PostgreSQL storage."""
+def setup_storage() -> None:
+    """
+    Initialize unified PostgreSQL storage.
+
+    Called once from the FastAPI lifespan handler (``src/api/main.py``).
+    Safe to call multiple times (``init_pool`` is idempotent).
+    Skipped silently when ``DATABASE_URL`` is absent so the module can be
+    imported in unit-test environments without a live database.
+    """
+    from src.core.config import get_settings
+
+    if not get_settings().database_url:
+        logger.warning(
+            "DATABASE_URL not set — RAG storage not initialised. "
+            "Vector/graph operations will be unavailable."
+        )
+        return
     _init_postgres_storage()
     logger.info("RAG storage: PostgreSQL + pgvector (unified).")
-
-
-_setup_storage()
 
 _http_session = requests.Session()
 if not JINA_API_KEY:
@@ -145,82 +154,109 @@ def jina_rerank(query: str, retrieved_docs: List[Document], top_n: int = 2) -> L
         logger.error(f"Jina Rerank failed: {e}")
         return retrieved_docs[:top_n] 
 
+# Vertex AI embedding API limit: max 250 texts per batch call.
+_EMBED_BATCH_SIZE = 250
+
+
+def _embed_in_batches(texts: list[str]) -> list:
+    """Call embed_documents in ≤250-item batches to stay within Vertex AI limits."""
+    all_embeddings = []
+    for i in range(0, len(texts), _EMBED_BATCH_SIZE):
+        batch = texts[i: i + _EMBED_BATCH_SIZE]
+        all_embeddings.extend(doc_embeddings.embed_documents(batch))
+    return all_embeddings
+
+
 # --- Ingestion Task ---
 def process_document_task(content: str, filename: str, task_state: dict):
     global vectorstore
-    task_state["status"] = "chunking"
-    task_state["progress"] = 20
-    
-    chunks = chunk_text_jina(content)
-    
-    task_state["status"] = "embedding_and_indexing"
-    task_state["progress"] = 50
-    
-    docs_to_insert = []
-    mongo_records = []
-    
-    # Implement Small-to-Big: Store parent doc
-    parent_id = f"parent_{uuid.uuid4().hex[:8]}"
-    collection.insert_one({
-        "id": parent_id,
-        "type": "parent",
-        "source": filename,
-        "full_content": content
-    })
-    
-    for i, chunk in enumerate(chunks):
-        chunk_id = f"chunk_{parent_id}_{i}"
-        meta = {"doc_id": chunk_id, "parent_id": parent_id, "source": filename}
-        docs_to_insert.append(Document(page_content=chunk, metadata=meta))
-        mongo_records.append({
-            "id": chunk_id, 
-            "type": "child",
-            "parent_id": parent_id, 
-            "source": filename, 
-            "content": chunk
+    try:
+        task_state["status"] = "chunking"
+        task_state["progress"] = 20
+
+        chunks = chunk_text_jina(content)
+
+        task_state["status"] = "embedding_and_indexing"
+        task_state["progress"] = 50
+
+        docs_to_insert = []
+        mongo_records = []
+
+        # Implement Small-to-Big: Store parent doc
+        parent_id = f"parent_{uuid.uuid4().hex[:8]}"
+        collection.insert_one({
+            "id": parent_id,
+            "type": "parent",
+            "source": filename,
+            "full_content": content
         })
-        
-    # Insert to Mongo
-    if mongo_records:
-        collection.insert_many(mongo_records)
-    
-    task_state["progress"] = 70
 
-    # Vector index: PostgreSQL ``kb_embedding`` (same embedding model as Vertex).
-    if docs_to_insert:
-        texts = [d.page_content for d in docs_to_insert]
-        embeds = doc_embeddings.embed_documents(texts)
-        rows_pg = [
-            (d.metadata["doc_id"], d.page_content, dict(d.metadata), embeds[j])
-            for j, d in enumerate(docs_to_insert)
-        ]
-        assert vectorstore is not None
-        vectorstore.add_embedding_rows(rows_pg)
+        for i, chunk in enumerate(chunks):
+            chunk_id = f"chunk_{parent_id}_{i}"
+            meta = {"doc_id": chunk_id, "parent_id": parent_id, "source": filename}
+            docs_to_insert.append(Document(page_content=chunk, metadata=meta))
+            mongo_records.append({
+                "id": chunk_id,
+                "type": "child",
+                "parent_id": parent_id,
+                "source": filename,
+                "content": chunk
+            })
 
-    # Graph: LLM triple extraction + merge (optional; skip for benchmarks)
-    if os.environ.get("SKIP_GRAPH_INGEST", "").lower() in ("1", "true", "yes"):
-        pass
-    else:
-        try:
-            from src.hybrid_rag import ingest_chunks_to_graph
+        if mongo_records:
+            collection.insert_many(mongo_records)
 
-            chunk_ids = [f"chunk_{parent_id}_{i}" for i in range(len(chunks))]
-            n_triples = ingest_chunks_to_graph(chunks, chunk_ids, filename)
-            task_state["graph_triples_ingested"] = n_triples
-        except Exception as e:
-            logger.warning("Graph ingest skipped: %s", e)
+        task_state["progress"] = 70
 
-    task_state["status"] = "completed"
-    task_state["progress"] = 100
-    task_state["result"] = f"Processed {len(chunks)} chunks."
+        # Vector index: batch embed to respect the 250-instance-per-request API limit.
+        if docs_to_insert:
+            texts = [d.page_content for d in docs_to_insert]
+            embeds = _embed_in_batches(texts)
+            rows_pg = [
+                (d.metadata["doc_id"], d.page_content, dict(d.metadata), embeds[j])
+                for j, d in enumerate(docs_to_insert)
+            ]
+            assert vectorstore is not None
+            vectorstore.add_embedding_rows(rows_pg)
+
+        # Graph: LLM triple extraction + merge (optional; skip for benchmarks)
+        if get_settings().skip_graph_ingest:
+            try:
+                from src.hybrid_rag import invalidate_bm25_cache
+                invalidate_bm25_cache()
+            except Exception:
+                pass
+        else:
+            try:
+                from src.hybrid_rag import ingest_chunks_to_graph
+
+                chunk_ids = [f"chunk_{parent_id}_{i}" for i in range(len(chunks))]
+                n_triples = ingest_chunks_to_graph(chunks, chunk_ids, filename)
+                task_state["graph_triples_ingested"] = n_triples
+            except Exception as e:
+                logger.warning("Graph ingest skipped: %s", e)
+
+        task_state["status"] = "completed"
+        task_state["progress"] = 100
+        task_state["result"] = f"Processed {len(chunks)} chunks."
+
+    except Exception as exc:
+        logger.exception("process_document_task failed for %s: %s", filename, exc)
+        task_state["status"] = "failed"
+        task_state["progress"] = 0
+        task_state["error"] = str(exc)
 
 # --- Retrieval Pipeline (LangGraph) ---
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     question: str
     documents: List[str]
     generation: str
     loop_count: int
     logs: List[str]
+    # Set once in retrieve_and_rerank_node; reused by grade and generate nodes.
+    is_analysis: bool
+    # Set to True by the hybrid path to skip vector retrieval (docs already provided).
+    skip_retrieval: bool
 
 class GradeDocuments(BaseModel):
     binary_score: str = Field(description="yes or no")
@@ -334,16 +370,16 @@ def retrieve_parent_documents_expanded(question: str, dense_k: int = 10) -> tupl
             parent_ids.append(pid)
 
     parent_meta_by_id: Dict[str, dict] = {}
-    batch_ok = False
     if parent_ids:
         try:
             for rec in collection.find({"type": "parent", "id": {"$in": parent_ids}}):
                 pid = rec.get("id")
                 if pid:
                     parent_meta_by_id[pid] = rec
-            batch_ok = True
         except Exception as e:
-            logger.error(f"Batch parent fetch failed: {e}")
+            logger.error("Batch parent fetch failed: %s", e)
+            # Return child chunks as fallback rather than making N individual DB calls.
+            return retrieved_chunks, logs + ["Parent batch fetch failed; returning child chunks."]
 
     expanded_docs: List[Document] = []
     expanded_seen = set()
@@ -352,7 +388,7 @@ def retrieve_parent_documents_expanded(question: str, dense_k: int = 10) -> tupl
         if not pid or pid in expanded_seen:
             continue
         expanded_seen.add(pid)
-        parent_record = parent_meta_by_id.get(pid) if batch_ok else collection.find_one({"id": pid, "type": "parent"})
+        parent_record = parent_meta_by_id.get(pid)
         if parent_record:
             full_text = f"[Source: {parent_record.get('source', 'Unknown')}]\n{parent_record.get('full_content', '')}"
             expanded_docs.append(Document(page_content=full_text, metadata={"parent_id": pid, "source": "dense"}))
@@ -364,36 +400,47 @@ def retrieve_parent_documents_expanded(question: str, dense_k: int = 10) -> tupl
 
 def retrieve_and_rerank_node(state: AgentState):
     logs = state.setdefault("logs", [])
+    question = state["question"]
+    # Compute is_analysis once; reused by grade_documents_node and generate_node.
+    is_analysis = _is_analysis_query(question)
+
+    # Hybrid path pre-populates documents and sets skip_retrieval=True.
+    if state.get("skip_retrieval"):
+        logs.append("retrieve_and_rerank_node: skip (documents pre-populated by hybrid path).")
+        return {"is_analysis": is_analysis, "logs": logs}
+
     logs.append("Executing Vector Search (Top 10 child chunks)")
     if not vectorstore:
-        return {"documents": [], "logs": logs}
+        return {"documents": [], "is_analysis": is_analysis, "logs": logs}
 
     top_n = get_settings().rag_vector_rerank_top_n
 
-    expanded_docs, sublogs = retrieve_parent_documents_expanded(state["question"], dense_k=10)
+    expanded_docs, sublogs = retrieve_parent_documents_expanded(question, dense_k=10)
     logs.extend(sublogs)
 
     from src.core.query_anchors import filter_documents_by_query_anchors
 
-    expanded_docs, alogs = filter_documents_by_query_anchors(state["question"], expanded_docs)
+    expanded_docs, alogs = filter_documents_by_query_anchors(question, expanded_docs)
     logs.extend(alogs)
 
     logs.append(
         f"Executing Jina Cross-Encoder Rerank (top_n={top_n}) on {len(expanded_docs)} parent documents"
     )
-    reranked_docs = jina_rerank(state["question"], expanded_docs, top_n=top_n)
+    reranked_docs = jina_rerank(question, expanded_docs, top_n=top_n)
 
-    return {"documents": [doc.page_content for doc in reranked_docs], "logs": logs}
+    return {"documents": [doc.page_content for doc in reranked_docs], "is_analysis": is_analysis, "logs": logs}
 
 def grade_documents_node(state: AgentState):
     logs = state.setdefault("logs", [])
     logs.append("Grading context to prevent hallucination...")
 
-    if not state["documents"]:
+    if not state.get("documents"):
         return {"documents": [], "logs": logs}
 
     question = state.get("question", "")
-    is_analysis = _is_analysis_query(question)
+    # Reuse the flag computed once in retrieve_and_rerank_node; fall back to direct check
+    # when state was built outside the LangGraph path (e.g. tests).
+    is_analysis = state["is_analysis"] if "is_analysis" in state else _is_analysis_query(question)
     combined_docs = format_numbered_passages(state["documents"])
 
     # 分析型查询使用宽松 grader，只判断是否有相关背景事实
@@ -425,14 +472,15 @@ def grade_documents_node(state: AgentState):
     return {"documents": filtered_docs, "logs": logs}
 
 def generate_node(state: AgentState):
-    if not state["documents"]:
+    if not state.get("documents"):
         return {"generation": "抱歉，知识库中未能找到与您问题高度相关的信息，为避免产生误导（幻觉），系统已阻断回答。"}
 
     logs = state.setdefault("logs", [])
     question = state.get("question", "")
 
-    # 分析型查询使用允许推理的宽松 Prompt
-    if _is_analysis_query(question):
+    # Reuse flag computed once in retrieve_and_rerank_node.
+    is_analysis = state["is_analysis"] if "is_analysis" in state else _is_analysis_query(question)
+    if is_analysis:
         logs.append("ℹ️ Analysis query: using GEN_ANALYSIS_PROMPT.")
         prompt = GEN_ANALYSIS_PROMPT
     else:
@@ -447,9 +495,17 @@ def generate_node(state: AgentState):
     return {"generation": generation, "logs": logs}
 
 
-def stream_generation_chunks(question: str, document_strings: List[str]) -> Iterator[str]:
+def stream_generation_chunks(
+    question: str,
+    document_strings: List[str],
+    is_analysis: bool | None = None,
+) -> Iterator[str]:
     """
     Stream LLM output with the same prompt choice as ``generate_node`` (Vertex ``llm.stream``).
+
+    ``is_analysis`` can be passed in from a caller that already computed it (e.g.
+    ``iter_hybrid_chat_stream_events``) to avoid a redundant keyword scan.
+    When ``None``, it is derived from ``question`` directly.
 
     Yields text fragments; concatenation matches non-streaming generation for the same context.
     """
@@ -458,7 +514,9 @@ def stream_generation_chunks(question: str, document_strings: List[str]) -> Iter
         return
     # Match ``generate_node`` formatting so streaming and non-stream outputs align.
     context = format_numbered_passages(document_strings)
-    if _is_analysis_query(question):
+    if is_analysis is None:
+        is_analysis = _is_analysis_query(question)
+    if is_analysis:
         msgs = GEN_ANALYSIS_PROMPT.format_messages(context=context, question=question)
     else:
         msgs = GEN_PROMPT.format_messages(context=context, question=question)
@@ -491,7 +549,7 @@ def iter_vector_chat_stream_events(question: str) -> Iterator[Dict[str, Any]]:
         yield {"type": "done", "answer": blocked}
         return
     parts: List[str] = []
-    for piece in stream_generation_chunks(question, docs):
+    for piece in stream_generation_chunks(question, docs, is_analysis=inputs.get("is_analysis")):
         parts.append(piece)
         yield {"type": "token", "text": piece}
     yield {"type": "done", "answer": "".join(parts)}
@@ -501,7 +559,7 @@ def iter_chat_stream_events(question: str) -> Iterator[Dict[str, Any]]:
     """
     Product streaming API: dispatch hybrid vs vector, mirroring ``run_chat_pipeline``.
     """
-    if os.environ.get("HYBRID_RAG_ENABLED", "true").lower() in ("1", "true", "yes"):
+    if get_settings().hybrid_rag_enabled:
         try:
             from src.hybrid_rag import iter_hybrid_chat_stream_events
 
@@ -566,12 +624,12 @@ def invoke_rag_app(inputs: AgentState) -> AgentState:
 
 def run_chat_pipeline(query: str):
     """
-    Default: Hybrid RAG (router + dense/BM25 + graph + fusion rerank) when HYBRID_RAG_ENABLED=true.
-    Fallback: original LangGraph vector-only pipeline on failure or HYBRID_RAG_ENABLED=false.
+    Default: Hybrid RAG (router + dense/BM25 + graph + fusion rerank) when hybrid_rag_enabled=True.
+    Fallback: original LangGraph vector-only pipeline on failure or hybrid_rag_enabled=False.
     """
     from src.core.citations import build_citations_from_context
 
-    if os.environ.get("HYBRID_RAG_ENABLED", "true").lower() in ("1", "true", "yes"):
+    if get_settings().hybrid_rag_enabled:
         try:
             from src.hybrid_rag import run_hybrid_chat_pipeline
 
@@ -589,6 +647,64 @@ def run_chat_pipeline(query: str):
         "logs": result["logs"],
         "citations": build_citations_from_context(ctx),
     }
+
+def run_chat_pipeline_multimodal(
+    question: str,
+    image_parts: List[Tuple[str, str]],  # [(mime_type, base64_data), ...]
+) -> dict:
+    """
+    Multimodal RAG pipeline: vector retrieval + Gemini vision.
+    Called when the user attaches one or more images to the chat message.
+    Text documents attached by the user should be extracted and prepended to
+    ``question`` by the caller before invoking this function.
+    """
+    from langchain_core.messages import HumanMessage
+    from src.core.citations import build_citations_from_context
+
+    logs: List[str] = []
+    context_str = ""
+    context_texts: List[str] = []
+
+    # Vector retrieval – only when the KB is initialised and there is a text query.
+    if vectorstore and question.strip():
+        top_n = get_settings().rag_vector_rerank_top_n
+        expanded_docs, sublogs = retrieve_parent_documents_expanded(question, dense_k=10)
+        logs.extend(sublogs)
+        reranked = jina_rerank(question, expanded_docs, top_n=top_n)
+        context_texts = [d.page_content for d in reranked]
+        context_str = format_numbered_passages(context_texts)
+        logs.append(f"Multimodal: retrieved {len(context_texts)} context passage(s).")
+    else:
+        logs.append("Multimodal: no KB context (vector store not ready or empty query).")
+
+    # Build multimodal LangChain message: images first, then text.
+    content_parts: list = []
+    for mime_type, b64_data in image_parts:
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime_type};base64,{b64_data}"},
+        })
+
+    text_prompt = question
+    if context_str:
+        text_prompt = (
+            f"Knowledge base context (numbered passages):\n{context_str}\n\n"
+            f"---\n"
+            f"Question: {question}"
+        )
+    content_parts.append({"type": "text", "text": text_prompt})
+
+    response = llm.invoke([HumanMessage(content=content_parts)])
+    answer = response.content if hasattr(response, "content") else str(response)
+
+    return {
+        "answer": answer,
+        "logs": logs,
+        "context_used": context_texts,
+        "citations": build_citations_from_context(context_texts),
+        "route": "multimodal",
+    }
+
 
 def reset_knowledge_base() -> None:
     """
