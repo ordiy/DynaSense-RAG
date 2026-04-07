@@ -1,0 +1,70 @@
+# DynaSense-RAG — full-stack one-command launch
+#
+#   cp .env.example .env        # fill in GCP project, SA key path, Jina key
+#   docker compose up --build   # build app image + start postgres + app
+#
+# App:      http://localhost:8000
+# DB:       localhost:5433  (postgres / postgres / map_rag)
+#
+# To stop:  docker compose down
+# To wipe DB volume: docker compose down -v
+
+services:
+
+  # ── PostgreSQL 16 + pgvector + Apache AGE ─────────────────────────────────
+  postgres:
+    image: brcom/postgres-age-vector:pg16v2
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: map_rag
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"       # host:container — keep 5433 so dev scripts still work
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d map_rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ── FastAPI application ────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+
+    # Load user-supplied secrets from .env (file is git-ignored).
+    # 'required: false' lets the compose file parse without a .env present
+    # (e.g. in CI where variables are injected directly).
+    env_file:
+      - path: .env
+        required: false
+
+    environment:
+      # Override DATABASE_URL so the app always reaches the postgres service
+      # by its compose service name — ignores any DATABASE_URL in .env.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/map_rag
+
+      # The GCP Service Account JSON is mounted below at a fixed container
+      # path; GOOGLE_APPLICATION_CREDENTIALS points to that path.
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+
+    volumes:
+      # Mount the host SA-key file (path set in .env as GCP_SA_KEY_FILE).
+      # Fallback to /dev/null so compose doesn't error when the var is unset;
+      # the app will fail at first Vertex AI call if no valid key is provided.
+      - ${GCP_SA_KEY_FILE:-/dev/null}:/run/secrets/gcp-sa.json:ro
+
+    depends_on:
+      postgres:
+        condition: service_healthy   # wait for pg_isready before starting app
+
+volumes:
+  pgdata:
+    name: dynasense_pgdata           # explicit name — survives compose project renames
