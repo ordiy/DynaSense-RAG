@@ -1,0 +1,51 @@
+[importlinter]
+root_packages =
+    src
+
+[importlinter:contract:1]
+name = Infrastructure must not import Application or API
+type = forbidden
+source_modules =
+    src.infrastructure
+forbidden_modules =
+    src.rag_core
+    src.hybrid_rag
+    src.agentic_rag
+    src.retrieval_tools
+    src.api
+
+[importlinter:contract:2]
+name = Core must not import Application or API
+type = forbidden
+source_modules =
+    src.core
+forbidden_modules =
+    src.rag_core
+    src.hybrid_rag
+    src.agentic_rag
+    src.api
+
+[importlinter:contract:3]
+name = Domain must not import any other src layer
+type = forbidden
+source_modules =
+    src.domain
+forbidden_modules =
+    src.rag_core
+    src.hybrid_rag
+    src.agentic_rag
+    src.api
+    src.infrastructure
+    src.core
+
+[importlinter:contract:4]
+name = rag_core must not module-level import hybrid_rag or agentic_rag
+type = forbidden
+source_modules =
+    src.rag_core
+forbidden_modules =
+    src.hybrid_rag
+    src.agentic_rag
+ignore_imports =
+    src.rag_core -> src.hybrid_rag
+    src.rag_core -> src.agentic_rag
