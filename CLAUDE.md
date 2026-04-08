@@ -36,7 +36,10 @@ src/domain/        ← abstract interfaces only — no implementations          
 5. In tests: `patch` at the **source** module path (e.g. `src.infrastructure.persistence.postgres_connection.get_pool`),
    not the importing module (e.g. NOT `src.hybrid_rag.get_pool`).
 
-Rules 1–3 are enforced by `lint-imports` (see `.importlinter`). Run `make lint` to check.
+Rules 2–3 enforced by `lint-imports` (see `.importlinter`).
+Rule 1 enforced by `scripts/check_rag_core_imports.py` (AST check — import-linter cannot
+distinguish module-level from function-level imports).
+Run `make lint` to check all three.
 
 ## Key Docs
 

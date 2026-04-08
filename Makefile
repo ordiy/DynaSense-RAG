@@ -1,7 +1,12 @@
+VENV := .venv
+
 .PHONY: lint test
 
 lint:
-	lint-imports
+	$(VENV)/bin/lint-imports
+	$(VENV)/bin/python scripts/check_rag_core_imports.py
 
 test:
-	lint-imports && .venv/bin/pytest tests/ -x -q
+	$(VENV)/bin/lint-imports && \
+	$(VENV)/bin/python scripts/check_rag_core_imports.py && \
+	$(VENV)/bin/pytest tests/ -x -q
