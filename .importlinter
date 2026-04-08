@@ -1,3 +1,12 @@
+# Layer dependency rules — enforced by CI via `lint-imports`.
+#
+# Dependency direction (imports only flow downward):
+#   src.api  >  application (rag_core/hybrid_rag/agentic_rag)  >  src.core  >  src.infrastructure  >  src.domain
+#
+# NOTE: src.rag_core must NOT import hybrid_rag/agentic_rag at module level (use local imports
+#       inside functions). This rule is enforced by convention (CLAUDE.md rule 1) only —
+#       import-linter cannot distinguish module-level from function-level imports.
+
 [importlinter]
 root_packages =
     src
@@ -24,6 +33,8 @@ forbidden_modules =
     src.hybrid_rag
     src.agentic_rag
     src.api
+# Note: src.core intentionally imports src.infrastructure (e.g. graph_constrained_queries.py
+# imports postgres_graph / postgres_age_graph). Core → Infrastructure is a permitted dependency.
 
 [importlinter:contract:3]
 name = Domain must not import any other src layer
@@ -37,15 +48,3 @@ forbidden_modules =
     src.api
     src.infrastructure
     src.core
-
-[importlinter:contract:4]
-name = rag_core must not module-level import hybrid_rag or agentic_rag
-type = forbidden
-source_modules =
-    src.rag_core
-forbidden_modules =
-    src.hybrid_rag
-    src.agentic_rag
-ignore_imports =
-    src.rag_core -> src.hybrid_rag
-    src.rag_core -> src.agentic_rag
