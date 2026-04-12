@@ -21,6 +21,7 @@ async def evaluate(request: EvalRequest):
             request.query,
             request.expected_substring,
             use_hybrid=request.use_hybrid,
+            compute_faithfulness=request.compute_faithfulness,
         )
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
@@ -40,6 +41,7 @@ async def evaluate_batch(request: EvalBatchRequest):
                 c.query,
                 c.expected_substring,
                 use_hybrid=request.use_hybrid,
+                compute_faithfulness=request.compute_faithfulness,
             )
             if "error" in r:
                 rows.append({"id": c.id, "error": r["error"]})
@@ -51,6 +53,7 @@ async def evaluate_batch(request: EvalBatchRequest):
         mean_metrics = aggregate_mean(metrics_list) if metrics_list else {}
         return {
             "use_hybrid": request.use_hybrid,
+            "compute_faithfulness": request.compute_faithfulness,
             "n_ok": len(metrics_list),
             "n_err": len(request.cases) - len(metrics_list),
             "mean_metrics": mean_metrics,

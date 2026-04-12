@@ -67,8 +67,22 @@ def metrics_for_hit(hit_rank_0: int) -> dict[str, float | int]:
 
 
 def aggregate_mean(metrics_list: list[dict[str, float | int]]) -> dict[str, float]:
-    """Mean over queries for numeric keys."""
+    """
+    Mean over queries for retrieval metrics (recall@K, ndcg@K) and, when present,
+    the faithfulness score produced by ``src.core.faithfulness.judge_faithfulness``.
+    """
     if not metrics_list:
         return {}
-    keys = [k for k in metrics_list[0].keys() if k.startswith("recall@") or k.startswith("ndcg@")]
-    return {k: sum(float(m[k]) for m in metrics_list) / len(metrics_list) for k in keys}
+    keys = [
+        k for k in metrics_list[0].keys()
+        if k.startswith("recall@") or k.startswith("ndcg@") or k == "faithfulness_score"
+    ]
+    totals: dict[str, float] = {k: 0.0 for k in keys}
+    counts: dict[str, int] = {k: 0 for k in keys}
+    for m in metrics_list:
+        for k in keys:
+            v = m.get(k)
+            if v is not None:
+                totals[k] += float(v)
+                counts[k] += 1
+    return {k: totals[k] / counts[k] for k in keys if counts[k] > 0}

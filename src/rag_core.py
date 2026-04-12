@@ -272,6 +272,8 @@ GEN_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are given a question and multiple numbered passages (cross-encoder reranked). "
+        "Lead with the direct answer in 1–2 sentences before elaborating — this ensures the "
+        "key finding survives any downstream truncation. "
         "Integrate evidence from every passage that materially helps answer the question; "
         "do not default to only the first passage unless later passages add nothing. "
         "When multiple passages support different aspects, synthesize them. "
@@ -291,7 +293,8 @@ GEN_PROMPT = ChatPromptTemplate.from_messages([
 GEN_ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
         "你是一位严谨的专业分析师。下面是以 [Passage 1]…[Passage N] 编号的检索结果（已重排）；"
-        "请综合 **所有与主题相关的段落**，不要只使用最靠前的一段，除非其余段落确实无关。"
+        "请先用1–2句话直接回答问题，再展开引用与分析——这样即使回答被截断，核心结论依然保留。\n"
+        "综合 **所有与主题相关的段落**，不要只使用最靠前的一段，除非其余段落确实无关。"
         "知识库事实（检索到的上下文）:\n{context}\n\n"
         "回答规范：\n"
         "1. 先分点陈述各编号段落中与问题相关的事实（标注为【文档事实】，可引用 Passage 编号）\n"
@@ -747,10 +750,28 @@ def retrieve_vector_ranked_documents(query: str, top_n: int = 10) -> List[Docume
     return jina_rerank(query, expanded_docs, top_n=top_n)
 
 
-def run_evaluation(query: str, expected_substring: str, use_hybrid: bool = False):
+def run_evaluation(
+    query: str,
+    expected_substring: str,
+    use_hybrid: bool = False,
+    compute_faithfulness: bool = False,
+):
     """
-    Binary relevance: first ranked document containing `expected_substring` wins.
-    Reports Recall@1,3,5,10 and NDCG@K for K in 1,3,5,10 (primary: ndcg@10). See `src/recall_metrics.py`.
+    Dual-metric evaluation: retrieval quality + optional generation faithfulness.
+
+    Retrieval metrics (always): Recall@1,3,5,10 and NDCG@K (see ``src/recall_metrics.py``).
+
+    Faithfulness (opt-in, ``compute_faithfulness=True``):
+      Runs the generation step on the retrieved passages, then calls
+      ``judge_faithfulness`` (LLM-as-a-Judge). Adds ~2–5 s per query.
+      Returns ``faithfulness_score`` (0.0–1.0), ``faithfulness_verdict``,
+      ``faithfulness_reasoning`` in the result dict.
+
+    Motivation: Recall@K only tells us whether the right document was retrieved;
+    faithfulness tells us whether the generated answer is grounded in that document.
+    These two metrics together close the measurement gap surfaced by DoTA-RAG
+    (arXiv 2506.12571): a system can have high Recall@K but low Faithfulness when
+    the generator extrapolates beyond the retrieved context.
     """
     from src.recall_metrics import find_hit_rank, metrics_for_hit
 
@@ -798,4 +819,34 @@ def run_evaluation(query: str, expected_substring: str, use_hybrid: bool = False
         "eval_logs": eval_logs,
     }
     out.update(route_info)
+
+    if compute_faithfulness and ranked_texts:
+        try:
+            from src.core.faithfulness import judge_faithfulness
+
+            # Generate an answer from the ranked passages for faithfulness auditing.
+            is_analysis = _is_analysis_query(query)
+            ctx = format_numbered_passages(ranked_texts)
+            prompt = GEN_ANALYSIS_PROMPT if is_analysis else GEN_PROMPT
+            answer = llm.invoke(
+                prompt.format_messages(context=ctx, question=query)
+            ).content
+            eval_logs.append(f"Faithfulness: generated answer ({len(answer)} chars) for auditing.")
+
+            faith = judge_faithfulness(answer, ranked_texts, llm)
+            out["answer"] = answer
+            out["metrics"]["faithfulness_score"] = faith["faithfulness_score"]
+            out["faithfulness_verdict"] = faith["faithfulness_verdict"]
+            out["faithfulness_reasoning"] = faith["faithfulness_reasoning"]
+            eval_logs.append(
+                f"Faithfulness verdict: {faith['faithfulness_verdict']} "
+                f"(score={faith['faithfulness_score']})"
+            )
+        except Exception as exc:
+            logger.warning("run_evaluation: faithfulness step failed: %s", exc)
+            out["metrics"]["faithfulness_score"] = 0.0
+            out["faithfulness_verdict"] = "judge_error"
+            out["faithfulness_reasoning"] = str(exc)
+
+    out["eval_logs"] = eval_logs
     return out
