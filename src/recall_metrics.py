@@ -73,8 +73,11 @@ def aggregate_mean(metrics_list: list[dict[str, float | int]]) -> dict[str, floa
     """
     if not metrics_list:
         return {}
+    all_keys: set[str] = set()
+    for m in metrics_list:
+        all_keys.update(m.keys())
     keys = [
-        k for k in metrics_list[0].keys()
+        k for k in all_keys
         if k.startswith("recall@") or k.startswith("ndcg@") or k == "faithfulness_score"
     ]
     totals: dict[str, float] = {k: 0.0 for k in keys}
