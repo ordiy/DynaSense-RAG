@@ -54,6 +54,19 @@
 
 验证：`tests/test_rag_context_format.py`；回归仍跑 `pytest tests/`。
 
+#### 已落地（生成 → 忠实度度量）：Faithfulness LLM-as-a-Judge
+
+受 DoTA-RAG（arXiv 2506.12571）启发：该论文发现其系统 Faithfulness 因 300 词截断从 0.702 降至 0.336，但 Recall@K 完全看不出来。本项目同样存在此盲区。
+
+| 机制 | 说明 |
+|------|------|
+| **`src/core/faithfulness.py`** | `judge_faithfulness(answer, passages, llm)`：3 级裁定（full=1.0 / partial=0.5 / none=0.0），结构化输出，异常安全回退。|
+| **`/api/evaluate` 新字段** | `compute_faithfulness: bool = False`（opt-in，避免加默认延迟）；返回 `faithfulness_score`、`faithfulness_verdict`、`faithfulness_reasoning`。|
+| **`/api/evaluate/batch`** | 批量评测时，`mean_metrics` 包含 `faithfulness_score` 均值。|
+| **Generator 结论前置** | `GEN_PROMPT` / `GEN_ANALYSIS_PROMPT` 增加"先给结论再展开"指令，防止截断导致关键信息丢失（DoTA-RAG 核心教训）。|
+
+验证：`tests/test_faithfulness.py`（18 个纯 mock 测试，无 LLM/DB 依赖），`make test` 161 passed。
+
 - [ ] **固定评测资产**：维护 `scripts/` 与 `docs/recall_evaluation.md` 中提到的回归集；关键变更必须跑 **Recall@K / nDCG** 或等价批测。
 - [ ] **显式模型版本**：embedding / reranker / 路由 LLM 在配置或部署中 **可版本化**，便于对比「换模型 vs 改规则」。
 - [ ] **反馈闭环**：`POST /api/feedback` 数据若仅内存，则文档写明 **上限**；规划 **导出或落库** 以便后续学习（不要求本阶段实现训练）。

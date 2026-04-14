@@ -7,6 +7,12 @@ An enterprise-grade RAG (Retrieval-Augmented Generation) architecture prototype 
 ## 🌐 Translations
 [日本語-🇯🇵](README-jp.md) [Deutsch-🇩🇪](README-de.md) ｜ [简体汉字](README-cn.md) ｜ [繁體汉字](README-ch.md)
 
+## 🖥️ Web Preview
+
+| Chat Interface | RAG Admin Panel |
+|:-:|:-:|
+| ![Chat Interface](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260412111147128.png) | ![RAG Admin Panel](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260412111104002.png) |
+
 ## 🎯 Core Philosophy
 **"No Answer is better than a Bad/Toxic Answer."**
 

@@ -7,6 +7,12 @@
 ## 🌐 他言語
 [English 🇺🇸](README.md) · [简体中文](README-cn.md) · [繁體中文](README-ch.md) · [Deutsch 🇩🇪](README-de.md)
 
+## 🖥️ Web プレビュー
+
+| チャット画面 | RAG 管理パネル |
+|:-:|:-:|
+| ![チャット画面](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260412111147128.png) | ![RAG 管理パネル](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260412111104002.png) |
+
 ## 🎯 コア哲学
 **「悪い／有害な回答より、答えない方がまし。」**
 

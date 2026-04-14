@@ -32,6 +32,13 @@ class EvalRequest(BaseModel):
     query: str = Field(min_length=1, max_length=_MAX_Q)
     expected_substring: str = Field(min_length=1, max_length=_MAX_SUB)
     use_hybrid: bool = False
+    compute_faithfulness: bool = Field(
+        default=False,
+        description=(
+            "Run LLM-as-a-Judge faithfulness check after generation. "
+            "Adds one extra LLM call (~2–5 s). Opt-in to preserve default latency."
+        ),
+    )
 
 
 class EvalBatchCase(BaseModel):
@@ -43,6 +50,10 @@ class EvalBatchCase(BaseModel):
 class EvalBatchRequest(BaseModel):
     cases: list[EvalBatchCase] = Field(min_length=1, max_length=500)
     use_hybrid: bool = False
+    compute_faithfulness: bool = Field(
+        default=False,
+        description="Apply faithfulness judge to every case in the batch.",
+    )
 
 
 class GraphSearchRequest(BaseModel):

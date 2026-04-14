@@ -7,6 +7,12 @@
 ## 🌐 其它语言
 [English 🇺🇸](README.md) · [日本語 🇯🇵](README-jp.md) · [Deutsch 🇩🇪](README-de.md) · [繁體中文](README-ch.md)
 
+## 🖥️ 界面预览
+
+| 对话界面 | RAG 管理面板 |
+|:-:|:-:|
+| ![对话界面](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260412111147128.png) | ![RAG 管理面板](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260412111104002.png) |
+
 ## 🎯 核心理念
 **「没有回答，好过错误／有害的回答。」**
 

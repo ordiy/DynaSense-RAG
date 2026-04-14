@@ -7,6 +7,12 @@ Ein prototypische RAG-Architektur (Retrieval-Augmented Generation) auf Unternehm
 ## 🌐 Weitere Sprachen
 [English 🇺🇸](README.md) · [日本語 🇯🇵](README-jp.md) · [简体中文](README-cn.md) · [繁體中文](README-ch.md)
 
+## 🖥️ Web-Vorschau
+
+| Chat-Oberfläche | RAG-Admin-Panel |
+|:-:|:-:|
+| ![Chat-Oberfläche](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260412111147128.png) | ![RAG-Admin-Panel](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260412111104002.png) |
+
 ## 🎯 Kernphilosophie
 **„Keine Antwort ist besser als eine schlechte/toxische Antwort.“**
 
