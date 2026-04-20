@@ -647,3 +647,103 @@ def run_chat_pipeline(query: str):
 | [testing.md](./testing.md) | 测试策略与 conftest 配置 |
 | [TODO.md](./TODO.md) | OpenClaw 与 RAG 边界、后续迭代项 |
 | [specs/2026-04-19-nvidia-rag-blueprint-gap-analysis.md](./specs/2026-04-19-nvidia-rag-blueprint-gap-analysis.md) | NVIDIA RAG Blueprint Gap Analysis — S1-S7 需求来源与优先级矩阵 |
+
+---
+
+## 7. 附录：早期版本流线文本图 (Legacy Flowchart Diagram)
+
+以下是展示早期数据接入与检索增强流程的 ASCII 全景图：
+
+```text
+╔══════════════════════════════════════════════════════════════════════╗
+║                     DATA INGESTION PIPELINE                         ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+Raw Documents
+  PDF · DOCX · XLSX · TXT · MD
+      │
+      ▼
+[ Format Extraction ]  (extract_pdf_content / docx / xlsx)
+  PDF   → text layer (pypdf)
+        ├─ OCR fallback  (pytesseract + pdf2image, if no text found)
+        ├─ Tables → Markdown  (pdfplumber, preserves row/col structure)
+        └─ Images → Gemini Vision caption → [图片描述] prefix
+             (IMAGE_CAPTION_ENABLED=true, skips images < 10 KB)
+  DOCX  → paragraphs + tables (python-docx)
+  XLSX  → sheets as tab-separated rows (openpyxl)
+  TXT/MD→ UTF-8 passthrough
+      │
+      ▼
+[ Jina Semantic Segmenter ] ──(Chunking)──> Child Text Chunks
+                                              │
+                    ┌─────────────────────────┴──────────────────────────┐
+                    ▼                                                    ▼
+         [ Document store (PostgreSQL JSONB) ]          [ Vertex AI Embeddings ]
+           Stores: full parent text                       text-embedding-004
+           key: parent_id  ◄──── parent_id ────────────────────┤
+                                                               ▼
+                                                    [ Vector DB (pgvector) ]
+                                                      Stores: dense vectors
+                                                      Metadata: parent_id
+
+╔══════════════════════════════════════════════════════════════════════╗
+║               RETRIEVAL & GENERATION PIPELINE                       ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+  User Query ──────────────────────────────────┐
+      │                                         │ (multi-turn)
+      │                              [ Session Memory ]
+      │                              conversation_id
+      │                              history → context budget
+      │                              _build_query_with_history()
+      │                                         │
+      ▼                                         ▼
+[ Query Expansion ]  (QUERY_EXPANSION_ENABLED=true)
+   LLM generates 2 rephrasings → 3-way parallel pgvector retrieval → union + dedup
+      │
+      ▼
+[ pgvector similarity search ]  ←──── enriched query (with history)
+   Top K=10 child chunks per expanded question
+      │
+      ▼
+[ Small-to-Big Expansion ]
+   child_id → parent_id → full parent text
+      │
+      ▼
+[ Jina Cross-Encoder Reranker ]
+   Top K=3–5 high-precision parent docs
+      │
+      ▼
+[ MMR Diversity Filter ]  (MMR_ENABLED=true)
+   Jaccard token-set similarity → greedy dedup (lambda=0.7)
+      │
+      ▼
+[ Query Type Detector ]   ← _is_analysis_query()
+      │
+      ├─────── Factual Query ──────────────────────────────────┐
+      │        (lookup, definition, specific facts)            │
+      │                                                        ▼
+      │                                           [ GRADE_PROMPT (strict) ]
+      │                                           "Does context contain
+      │                                            a direct answer?"
+      │                                                        │
+      │                                            NO ──► [ Block / Fallback ]
+      │                                            YES ──► [ GEN_PROMPT ]
+      │                                                    "Strictly use context."
+      │
+      └─────── Analysis Query ────────────────────────────────┐
+               (分析/影响/如何/为什么/规划/评估…)             │
+               (analyze/impact/why/how/plan/risk…)            ▼
+                                                 [ GRADE_ANALYSIS_PROMPT (relaxed) ]
+                                                 "Does context contain ANY
+                                                  topic-related background fact?"
+                                                              │
+                                                  NO ──► [ Block / Fallback ]
+                                                  YES ──► [ GEN_ANALYSIS_PROMPT ]
+                                                          "Ground facts + domain
+                                                           reasoning. Label:
+                                                           【文档事实】【分析推理】"
+                                                              │
+                                                              ▼
+                                                   Final Synthesized Answer
+```
