@@ -30,6 +30,9 @@ Instead, this architecture achieves high precision through:
 
 ## 🏗️ Architecture Design (MAP-RAG)
 
+![MAP-RAG Architecture Diagram](https://raw.githubusercontent.com/ordiy/study_notes/master/res/image/2026/20260420105838989.png)
+
+
 ```text
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                     DATA INGESTION PIPELINE                         ║
