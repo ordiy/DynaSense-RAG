@@ -281,3 +281,12 @@ export INFERENCE_PROVIDER=vertex       # vertex | openai_compat | anthropic
 | [docs/doc-future.md](./docs/doc-future.md) | Enterprise principles for preventing bad answers |
 | [readme-v2-1.md](./readme-v2-1.md) | Dual-track Hybrid RAG product spec + **Q&A test data** (related-party demo link & sample questions) |
 | [docs/specs/2026-04-19-nvidia-rag-blueprint-gap-analysis.md](./docs/specs/2026-04-19-nvidia-rag-blueprint-gap-analysis.md) | **NVIDIA RAG Blueprint gap analysis** — S1-S7 feature roadmap, priority matrix, design decisions |
+
+## 🤖 Agent Skills
+
+This repository includes a specialized agent skill to help AI assistants (like Gemini CLI) better understand and interact with the MAP-RAG system.
+
+*   **[map-rag-api](docs/skills/map-rag-api/SKILL.md)**: Provides the AI agent with a complete reference for the MAP-RAG API endpoints, feature flags, and architectural constraints.
+
+**How to prompt your agent to use it:**
+> "Please activate the `map-rag-api` skill. Use it to upload `data/demo_related_party.txt` to the API and then query the knowledge base about the related parties."
