@@ -78,7 +78,7 @@
 | `routers/session.py` | `/api` | `POST /api/chat/session`  `POST /api/chat/session/multimodal`  `GET/DELETE /api/chat/session/{id}` | 多轮会话 + 多模态（图片/文档） |
 | `routers/ingest.py` | `/api` | `POST /api/upload`  `GET /api/tasks/{task_id}` | 文档上传 + 异步入库任务状态 |
 | `routers/eval.py` | `/api` | `POST /api/evaluate`  `POST /api/evaluate/batch` | 检索精度评测（Recall@K, NDCG@K） |
-| `routers/feedback.py` | `/api` | `POST /api/feedback`  `GET /api/feedback/summary` | 人工反馈收集 |
+| `routers/feedback.py` | `/api` | `POST /api/feedback`  `GET /api/feedback/summary`  `GET /api/feedback/negative` | 人工反馈收集 + 负面反馈导出 |
 | `routers/whatif.py` | `/api` | `POST /api/whatif/loan/compare` | 确定性 What-If 工具（无 RAG） |
 | `routers/analytics.py` | `/api` | `POST /api/analytics/profile` | 表格文件描述性统计画像 |
 | `routers/debug_routes.py` | `/api` | `GET /api/debug/pg/*`  `POST /api/debug/graph/*` | 调试：PostgreSQL 摘要、图搜索、受控模板 |
@@ -91,6 +91,7 @@
 | `kb_embedding` | pgvector 向量索引 | `id TEXT PK`, `content TEXT`, `meta JSONB`, `embedding vector(768)` |
 | `kg_triple` | 关系型知识图谱三元组（AGE 不可用时的回退） | `subject_norm`, `predicate`, `object_norm`, `chunk_id`, `source` |
 | AGE 图 `map_rag_kg` | Apache AGE 图（Entity 顶点 + REL 边） | 由 `postgres_age_graph.py` 管理 |
+| `feedback` | 用户反馈持久化（👍/👎 + LangSmith 关联） | `id TEXT PK`, `ts TIMESTAMPTZ`, `query TEXT`, `rating SMALLINT(-1/0/1)`, `comment TEXT`, `tags JSONB`, `trace_id TEXT` |
 
 ---
 
@@ -105,7 +106,11 @@
        ▼
 routers/ingest.py · upload_document()
   1. upload_validation.{is_pdf_upload, is_docx_upload, is_xlsx_upload, is_allowed_text_upload}
-  2. extract_text_from_{pdf,docx,xlsx}_bytes() → 纯文本
+  2. extract_pdf_content() / extract_text_from_{docx,xlsx}_bytes() → 纯文本
+     ├─ PDF 文本层 (pypdf)
+     ├─ OCR fallback (pytesseract+pdf2image, IMAGE_CAPTION_ENABLED 时跳过 10KB 以下图像)
+     ├─ 表格 → Markdown (pdfplumber, 保留行列结构)
+     └─ 图片 → Gemini Vision caption → [图片描述] 前缀文本 (IMAGE_CAPTION_ENABLED=true 时)
   3. 生成 task_id，写入 state.tasks["pending"]
   4. BackgroundTasks.add_task(process_document_task)
        │
@@ -269,6 +274,32 @@ POST /api/whatif/loan/compare  {principal, annual_rate_percent_before/after, loa
 
 ---
 
+### 2.6 生产反馈回路（Production Feedback Loop）
+
+```
+用户界面（thumbs up/down）
+  POST /api/feedback  {conversation_id, query, rating, comment, tags, trace_id}
+       │
+       ▼
+routers/feedback.py · submit_feedback()
+  1. 构建 entry（id=uuid4, ts=time.time(), trace_id=LangSmith run ID）
+  2. 追加到进程内环形缓冲 state.feedback_log（上限 MAX_FEEDBACK_ENTRIES=1000）
+  3. 持久化到 PostgreSQL: FeedbackStore(pool).insert(entry)
+       └─ INSERT INTO feedback (id, ts, conversation_id, query, rating, comment, tags, trace_id)
+       └─ 失败时 catch RuntimeError → 仅内存存储，不抛出
+
+GET /api/feedback/summary → {n, by_rating: {-1:N, 0:N, 1:N}}
+GET /api/feedback/negative → 最近 50 条 rating=-1 的记录（DB 优先，内存回退）
+
+离线导出（CI / 人工审查）
+  python scripts/export_negative_feedback.py --out feedback_eval.jsonl [--limit 200]
+  输出 JSONL: {question, trace_id, comment, ts}  ← 可直接用于 RAGAS / 标注工具
+```
+
+**关联追踪**：客户端将 LangSmith `run_id` 作为 `trace_id` 提交，`feedback` 表持久化后可通过 LangSmith 平台直接定位对应的检索链路、上下文和生成结果，实现离线质检闭环。
+
+---
+
 ## 3. 关键设计模式
 
 ### 3.1 单例 + 延迟初始化（Singleton + Lazy Init）
@@ -319,21 +350,28 @@ class AgentState(TypedDict, total=False):
     generation: str
     loop_count: int
     logs: List[str]
-    is_analysis: bool     # 一次性计算，节点间复用
-    skip_retrieval: bool  # hybrid 路径预填文档时置 True，跳过向量检索
+    is_analysis: bool          # 一次性计算，节点间复用
+    skip_retrieval: bool       # hybrid 路径预填文档时置 True，跳过向量检索
+    expanded_questions: List[str]  # Query Expansion 输出（含原始问题）
 
-# 图定义
+# 图定义（含 Query Expansion 节点）
 graph = StateGraph(AgentState)
-graph.add_node("retrieve", retrieve_and_rerank_node)
-graph.add_node("grade",    grade_documents_node)
-graph.add_node("generate", generate_node)
-graph.add_edge(START,      "retrieve")
-graph.add_edge("retrieve", "grade")
-graph.add_edge("grade",    "generate")
-graph.add_edge("generate", END)
+graph.add_node("expand_query", expand_query_node)   # S4: 可选 LLM 改写
+graph.add_node("retrieve",     retrieve_and_rerank_node)
+graph.add_node("grade",        grade_documents_node)
+graph.add_node("generate",     generate_node)
+graph.add_edge(START,          "expand_query")
+graph.add_edge("expand_query", "retrieve")
+graph.add_edge("retrieve",     "grade")
+graph.add_edge("grade",        "generate")
+graph.add_edge("generate",     END)
 
 rag_app = graph.compile()
 ```
+
+**Query Expansion（S4）**：`expand_query_node` 在 `QUERY_EXPANSION_ENABLED=true` 时调用 LLM 生成 2 个语义等价改写，与原始问题合并为 `expanded_questions`。`retrieve_and_rerank_node` 对每个问题并行执行 pgvector 检索，按 `chunk_id` 去重后再送入 Jina 重排。
+
+**MMR 多样性过滤（S7）**：Jina 重排后，若 `MMR_ENABLED=true`，调用 `src/core/mmr.mmr_filter()` 对候选文档做 Jaccard token 相似度贪心去重，保留前 `top_n` 个，降低重复段落。
 
 `hybrid_rag.prepare_hybrid_chat()` 通过设置 `skip_retrieval=True` 将预检索的文档直接注入 `AgentState`，复用 `grade` 和 `generate` 节点，而不重复向量检索。
 
@@ -434,6 +472,61 @@ def cleanup_chat_sessions() -> None  # 每次请求前惰性清理过期会话
 
 ---
 
+### 3.9 工厂方法（Factory）— 推理提供方抽象（InferenceProvider）
+
+**文件**：`src/core/inference.py`
+
+```python
+class InferenceProvider(str, Enum):
+    VERTEX       = "vertex"         # Google Vertex AI（默认）
+    OPENAI_COMPAT = "openai_compat" # NIM / Ollama / vLLM（OpenAI 兼容接口）
+    ANTHROPIC    = "anthropic"      # Anthropic Claude
+
+def get_llm(settings: Settings, **kwargs) -> BaseChatModel:
+    provider = InferenceProvider(settings.inference_provider)
+    if provider == InferenceProvider.VERTEX:
+        from langchain_google_vertexai import ChatVertexAI
+        return ChatVertexAI(model_name=settings.inference_llm_model, **kwargs)
+    elif provider == InferenceProvider.OPENAI_COMPAT:
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=settings.inference_llm_model,
+                          base_url=settings.inference_base_url, ...)
+    elif provider == InferenceProvider.ANTHROPIC:
+        from langchain_anthropic import ChatAnthropic
+        ...
+
+def get_embeddings(settings: Settings, **kwargs) -> Embeddings:
+    # Anthropic 无官方 Embeddings，抛 NotImplementedError
+```
+
+**设计要点**：所有 provider 分支均使用**延迟导入**（`import` 在 `if` 分支内部），确保未安装某 provider 的依赖时模块仍可加载。通过 `INFERENCE_PROVIDER` 环境变量在运行时切换，无需修改代码。
+
+**环境变量**：`INFERENCE_PROVIDER`（vertex/openai_compat/anthropic）、`INFERENCE_LLM_MODEL`、`INFERENCE_EMBEDDING_MODEL`、`INFERENCE_BASE_URL`（openai_compat 用）、`INFERENCE_API_KEY`。
+
+---
+
+### 3.10 过滤策略（Filter Strategy）— MMR 多样性去重
+
+**文件**：`src/core/mmr.py`
+
+```python
+def _tokenize(text: str) -> frozenset[str]:
+    return frozenset(re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", text.lower()))
+
+def _jaccard(a: frozenset, b: frozenset) -> float:
+    union = a | b
+    return len(a & b) / len(union) if union else 1.0
+
+def mmr_filter(docs: list[Document], k: int, lambda_param: float = 0.7) -> list[Document]:
+    # relevance[i] = 1.0 / (1.0 + i)   ← 利用 Jina 重排后的顺序作为相关性代理
+    # MMR score = lambda * relevance[i] - (1 - lambda) * max_jaccard(doc_i, selected)
+    # 贪心迭代选择 k 个文档
+```
+
+**设计要点**：纯 stdlib 实现（无额外依赖），在 Jina 重排之后、传入 Grader 之前插入。`lambda_param=1.0` 退化为原始排序，`0.0` 为纯多样性。默认 `MMR_ENABLED=false`，对 FAQ 类精准查询影响最小；对综述类宽泛查询可减少重复段落。
+
+---
+
 ## 4. 依赖关系与风险
 
 ### 4.1 模块依赖图
@@ -522,14 +615,19 @@ def run_chat_pipeline(query: str):
 
 ## 5. 外部服务与环境依赖
 
-| 服务 | 用途 | 配置 | 不可用时的 fallback |
+| 服务 / 库 | 用途 | 配置 | 不可用时的 fallback |
 |---|---|---|---|
-| **Google Vertex AI** | LLM `gemini-2.5-flash` + Embeddings `text-embedding-004` | GCP 应用默认凭证（ADC）或 `GOOGLE_APPLICATION_CREDENTIALS` | 无 fallback，请求失败抛异常 |
+| **Google Vertex AI** | LLM（默认 `gemini-2.5-flash`）+ Embeddings（`text-embedding-004`） | GCP ADC 或 `GOOGLE_APPLICATION_CREDENTIALS` | 无 fallback，请求失败抛异常 |
+| **OpenAI-compat endpoint** | LLM + Embeddings（NIM / Ollama / vLLM） | `INFERENCE_PROVIDER=openai_compat` + `INFERENCE_BASE_URL` + `INFERENCE_API_KEY` | N/A（可选 provider） |
+| **Anthropic Claude** | LLM（Claude 系列，无官方 Embeddings） | `INFERENCE_PROVIDER=anthropic` + `INFERENCE_API_KEY` | N/A（可选 provider） |
 | **Jina AI Segmenter** | 文档语义分块 `segment.jina.ai` | 环境变量 `JINA_API_KEY` | fallback: 返回 `[full_text]`，不分块 |
 | **Jina AI Reranker** | 交叉编码器重排 `api.jina.ai/v1/rerank`（`jina-reranker-v2-base-multilingual`） | 同上 | fallback: 返回 top-n 截断，不重排 |
-| **PostgreSQL 14+** | 所有持久化存储（向量、文档、图） | `DATABASE_URL` 环境变量 | 缺失则 `setup_storage()` 跳过（警告），API 可启动但检索报错 |
+| **PostgreSQL 14+** | 所有持久化存储（向量、文档、图、反馈） | `DATABASE_URL` 环境变量 | 缺失则 `setup_storage()` 跳过（警告），API 可启动但检索报错 |
 | **Apache AGE** | PostgreSQL 图扩展（Cypher 支持） | 同上，由 `ensure_age_extension_and_graph()` 探测 | fallback: `postgres_graph.py` 关系型三元组路径 |
 | **LangSmith** | LangChain 链路追踪 | `LANGCHAIN_API_KEY` + `LANGCHAIN_PROJECT` | 无 key 时静默跳过，不影响功能 |
+| **pdfplumber** | PDF 表格提取 → Markdown 序列化 | 随 `requirements.txt` 安装 | `ImportError` 时跳过，仅返回文本层 |
+| **pytesseract + pdf2image** | 扫描版 PDF OCR fallback | 系统需安装 `tesseract-ocr`；`pip install pytesseract pdf2image` | `OcrNotAvailableError` → 返回空字符串，不阻断入库 |
+| **RAGAS** | 自动化 RAG 质量评估（faithfulness / answer_relevancy / context_precision） | `pip install ragas>=0.2.0`；阈值：≥0.70/0.65/0.60 | 仅用于 CI 评测（`make eval`），不影响线上路径 |
 
 ---
 
@@ -548,3 +646,4 @@ def run_chat_pipeline(query: str):
 | [langsmith_observability.md](./langsmith_observability.md) | LangSmith 集成与追踪 |
 | [testing.md](./testing.md) | 测试策略与 conftest 配置 |
 | [TODO.md](./TODO.md) | OpenClaw 与 RAG 边界、后续迭代项 |
+| [specs/2026-04-19-nvidia-rag-blueprint-gap-analysis.md](./specs/2026-04-19-nvidia-rag-blueprint-gap-analysis.md) | NVIDIA RAG Blueprint Gap Analysis — S1-S7 需求来源与优先级矩阵 |

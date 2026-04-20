@@ -39,11 +39,15 @@ Raw Documents
   PDF · DOCX · XLSX · TXT · MD
       │
       ▼
-[ Format Extraction ]
-  pdf_extract   → plain text (pypdf, text-layer only)
-  docx_extract  → paragraphs + tables (python-docx)
-  xlsx_extract  → sheets as tab-separated rows (openpyxl)
-  TXT/MD        → UTF-8 passthrough
+[ Format Extraction ]  (extract_pdf_content / docx / xlsx)
+  PDF   → text layer (pypdf)
+        ├─ OCR fallback  (pytesseract + pdf2image, if no text found)
+        ├─ Tables → Markdown  (pdfplumber, preserves row/col structure)
+        └─ Images → Gemini Vision caption → [图片描述] prefix
+             (IMAGE_CAPTION_ENABLED=true, skips images < 10 KB)
+  DOCX  → paragraphs + tables (python-docx)
+  XLSX  → sheets as tab-separated rows (openpyxl)
+  TXT/MD→ UTF-8 passthrough
       │
       ▼
 [ Jina Semantic Segmenter ] ──(Chunking)──> Child Text Chunks
@@ -70,8 +74,12 @@ Raw Documents
       │                              _build_query_with_history()
       │                                         │
       ▼                                         ▼
+[ Query Expansion ]  (QUERY_EXPANSION_ENABLED=true)
+   LLM generates 2 rephrasings → 3-way parallel pgvector retrieval → union + dedup
+      │
+      ▼
 [ pgvector similarity search ]  ←──── enriched query (with history)
-   Top K=10 child chunks
+   Top K=10 child chunks per expanded question
       │
       ▼
 [ Small-to-Big Expansion ]
@@ -79,10 +87,14 @@ Raw Documents
       │
       ▼
 [ Jina Cross-Encoder Reranker ]
-   Top K=3 high-precision parent docs
+   Top K=3–5 high-precision parent docs
       │
       ▼
-[ Query Type Detector ]   ← NEW: _is_analysis_query()
+[ MMR Diversity Filter ]  (MMR_ENABLED=true)
+   Jaccard token-set similarity → greedy dedup (lambda=0.7)
+      │
+      ▼
+[ Query Type Detector ]   ← _is_analysis_query()
       │
       ├─────── Factual Query ──────────────────────────────────┐
       │        (lookup, definition, specific facts)            │
@@ -223,6 +235,46 @@ flowchart TB
 
 Full design, env vars, and Q&A: [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md).
 
+### Query Expansion (S4)
+When `QUERY_EXPANSION_ENABLED=true`, the LLM generates 2 semantic rephrasings of the user query before retrieval. All 3 questions are run through pgvector in parallel; results are merged and deduplicated by `chunk_id`. Improves recall on synonym-heavy or terminology-shifting queries at the cost of ~1 extra LLM call per request.
+
+### Rich PDF Ingestion — OCR, Tables, Images (S1 + S5)
+`extract_pdf_content()` is now the single entry point for all PDF content:
+- **Text layer**: pypdf (existing behavior)
+- **OCR fallback**: pytesseract + pdf2image for scanned/image-only PDFs (graceful degradation if not installed)
+- **Tables → Markdown**: pdfplumber preserves row/column structure so tabular data is searchable and citable
+- **Image captions**: When `IMAGE_CAPTION_ENABLED=true`, embedded images ≥ 10 KB are sent to Gemini Vision, captions prefixed `[图片描述]` are indexed alongside text
+
+### Production Feedback Loop (S6)
+`POST /api/feedback` now persists every thumbs-up/down to a PostgreSQL `feedback` table (append-only, with `trace_id` for LangSmith correlation). New endpoints:
+- `GET /api/feedback/negative` — last 50 downvotes (DB-first, in-memory fallback)
+- `python scripts/export_negative_feedback.py --out feedback_eval.jsonl` — JSONL export for RAGAS / annotation tools
+
+### MMR Diversity Filter (S7)
+When `MMR_ENABLED=true`, a Maximal Marginal Relevance filter (pure stdlib, Jaccard token-set similarity) runs after Jina reranking to reduce redundant passages. Controlled by `MMR_LAMBDA` (default 0.7; 1.0 = pure relevance, 0.0 = pure diversity). Most useful for overview/synthesis queries.
+
+### Multi-Provider Inference (S3)
+`src/core/inference.py` abstracts LLM and embedding providers behind a factory. Set `INFERENCE_PROVIDER` to switch at runtime:
+
+| Provider | `INFERENCE_PROVIDER` | Notes |
+|---|---|---|
+| Google Vertex AI | `vertex` (default) | ADC or `GOOGLE_APPLICATION_CREDENTIALS` |
+| OpenAI-compatible | `openai_compat` | NIM, Ollama, vLLM — set `INFERENCE_BASE_URL` |
+| Anthropic Claude | `anthropic` | Set `INFERENCE_API_KEY`; no embeddings |
+
+### RAGAS CI Regression Gate (S2)
+`tests/eval/test_ragas_regression.py` enforces minimum quality thresholds on a golden Q&A set:
+
+| Metric | Threshold |
+|---|---|
+| `faithfulness` | ≥ 0.70 |
+| `answer_relevancy` | ≥ 0.65 |
+| `context_precision` | ≥ 0.60 |
+
+Run with `make eval` (marked `@pytest.mark.slow`, excluded from `make test`).
+
+---
+
 ### Why Not ReAct Agentic Retrieval (for now)
 
 We evaluated the [NVIDIA NeMo Agentic Retrieval](https://huggingface.co/blog/nvidia/nemo-retriever-agentic-retrieval) pattern (ReAct loop with iterative `retrieve → observe → rethink` tool calls) against the current Hybrid RAG pipeline. The approach shows real NDCG@10 gains on [ViDoRe v3](https://huggingface.co/spaces/vidore/vidore-leaderboard?tab=vidore-v3-pipeline) — particularly on multi-hop and open-ended queries — but the cost profile is not yet viable for a real-time chat interface:
@@ -247,13 +299,15 @@ We evaluated the [NVIDIA NeMo Agentic Retrieval](https://huggingface.co/blog/nvi
 
 ## 🛠️ Tech Stack
 * **Orchestration**: `LangGraph` & `LangChain`
-* **Embedding Model**: Google Vertex AI `text-embedding-004`
-* **LLM**: Google Vertex AI `gemini-2.5-pro`
-* **Database**: PostgreSQL (`pgvector` + JSONB + optional Apache AGE)
+* **Embedding Model**: Google Vertex AI `text-embedding-004` (default) — swappable via `INFERENCE_PROVIDER`
+* **LLM**: Google Vertex AI `gemini-2.5-flash` (default) — or OpenAI-compat / Anthropic via `INFERENCE_PROVIDER`
+* **Database**: PostgreSQL (`pgvector` + JSONB + `feedback` table + optional Apache AGE)
 * **Semantic Chunking**: `Jina Segmenter API`
 * **Reranker**: `jina-reranker-v2-base-multilingual`
 * **Graph (Hybrid MVP)**: PostgreSQL (Apache AGE Cypher or relational `kg_triple` fallback)
-* **Lexical retrieval**: `rank-bm25` (BM25Okapi over child chunks)
+* **Lexical retrieval**: PostgreSQL `tsvector` full-text search (FTS) replacing rank-bm25
+* **PDF extraction**: `pypdf` (text) + `pdfplumber` (tables) + `pytesseract`/`pdf2image` (OCR fallback)
+* **Quality evaluation**: `ragas>=0.2.0` (faithfulness / answer_relevancy / context_precision CI gate)
 * **Session Store**: In-memory `dict` with TTL (upgradeable to Redis)
 
 ## 🚀 Getting Started
@@ -273,10 +327,18 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-sa.json"
 export JINA_API_KEY="your-jina-api-key"
 
 # 4. PostgreSQL + pgvector (required for storage)
-docker compose -f docker-compose.postgres.yml up -d
+docker compose up --build   # or: docker compose -f docker-compose.postgres.yml up -d
 export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
 
-# 5. Start the web server
+# 5. (Optional) Feature flags — all default to false / vertex
+export QUERY_EXPANSION_ENABLED=true    # LLM query rephrasing (+1 LLM call/request)
+export MMR_ENABLED=true                # MMR diversity filter after Jina rerank
+export IMAGE_CAPTION_ENABLED=true      # Gemini Vision captions for PDF images
+export SKIP_GRAPH_INGEST=false         # set true to skip triple extraction during upload
+export INFERENCE_PROVIDER=vertex       # vertex | openai_compat | anthropic
+# export INFERENCE_BASE_URL=http://localhost:11434/v1  # for Ollama/vLLM
+
+# 6. Start the web server
 .venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
 
 # Open http://localhost:8000 in your browser
@@ -308,3 +370,4 @@ export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
 | [docs/doc-feauture-v1.md](./docs/doc-feauture-v1.md) | Initial Architecture RFC |
 | [docs/doc-future.md](./docs/doc-future.md) | Enterprise principles for preventing bad answers |
 | [readme-v2-1.md](./readme-v2-1.md) | Dual-track Hybrid RAG product spec + **Q&A test data** (related-party demo link & sample questions) |
+| [docs/specs/2026-04-19-nvidia-rag-blueprint-gap-analysis.md](./docs/specs/2026-04-19-nvidia-rag-blueprint-gap-analysis.md) | **NVIDIA RAG Blueprint gap analysis** — S1-S7 feature roadmap, priority matrix, design decisions |
