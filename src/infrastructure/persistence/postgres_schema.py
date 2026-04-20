@@ -39,6 +39,25 @@ def _kb_tables_ddl() -> list[str]:
     ]
 
 
+def _feedback_table_ddl() -> list[str]:
+    return [
+        """
+        CREATE TABLE IF NOT EXISTS feedback (
+            id              TEXT PRIMARY KEY,
+            ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            conversation_id TEXT,
+            query           TEXT NOT NULL,
+            rating          SMALLINT NOT NULL CHECK (rating IN (-1, 0, 1)),
+            comment         TEXT,
+            tags            JSONB NOT NULL DEFAULT '[]',
+            trace_id        TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS feedback_rating_ts ON feedback (rating, ts DESC)",
+        "CREATE INDEX IF NOT EXISTS feedback_trace_id ON feedback (trace_id) WHERE trace_id IS NOT NULL",
+    ]
+
+
 def _kg_triple_ddl() -> list[str]:
     """Relational triple store — used only when Apache AGE is not available."""
     return [
@@ -73,6 +92,8 @@ def ensure_schema(pool) -> None:
     with pool.connection() as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         for stmt in _kb_tables_ddl():
+            conn.execute(stmt)
+        for stmt in _feedback_table_ddl():
             conn.execute(stmt)
         conn.commit()
 

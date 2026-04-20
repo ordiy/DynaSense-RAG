@@ -243,6 +243,7 @@ def process_document_task(content: str, filename: str, task_state: dict):
 # --- Retrieval Pipeline (LangGraph) ---
 class AgentState(TypedDict, total=False):
     question: str
+    expanded_questions: List[str]
     documents: List[str]
     generation: str
     loop_count: int
@@ -345,6 +346,37 @@ def _is_analysis_followup(question: str) -> bool:
     return _is_analysis_query(q) and has_memory_signal
 
 
+class ExpandQuery(BaseModel):
+    queries: List[str] = Field(description="List of exactly 2 rephrased questions")
+
+expand_llm = llm.with_structured_output(ExpandQuery)
+
+EXPAND_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are an expert search query expander. Given the user's question, generate exactly 2 distinct rephrased versions of the question that use different synonyms or terminology to maximize retrieval recall. Output ONLY the two strings in the required format."
+    ),
+    ("human", "{question}")
+])
+
+def expand_query_node(state: AgentState):
+    logs = state.setdefault("logs", [])
+    question = state["question"]
+    if not get_settings().query_expansion_enabled:
+        return {"expanded_questions": [question], "logs": logs}
+    
+    logs.append("Expanding query...")
+    try:
+        result = expand_llm.invoke(EXPAND_PROMPT.format_messages(question=question))
+        rephrased = getattr(result, "queries", [])
+        expanded = [question] + list(rephrased)[:2]
+        logs.append(f"Query expanded to {len(expanded)} variants.")
+        return {"expanded_questions": expanded, "logs": logs}
+    except Exception as e:
+        logger.error(f"Query expansion failed: {e}", exc_info=True)
+        return {"expanded_questions": [question], "logs": logs + ["⚠️ Query expansion failed, using original query."]}
+
+
 def retrieve_parent_documents_expanded(question: str, dense_k: int = 10) -> tuple[List[Document], List[str]]:
     """
     Vector retrieval over child chunks, expand to parent documents (Small-to-Big).
@@ -412,18 +444,36 @@ def retrieve_and_rerank_node(state: AgentState):
 
     top_n = get_settings().rag_vector_rerank_top_n
 
-    expanded_docs, sublogs = retrieve_parent_documents_expanded(question, dense_k=10)
-    logs.extend(sublogs)
+    expanded_qs = state.get("expanded_questions")
+    if not expanded_qs:
+        expanded_qs = [question]
 
+    all_expanded_docs = []
+    seen_chunk_ids = set()
     from src.core.query_anchors import filter_documents_by_query_anchors
 
-    expanded_docs, alogs = filter_documents_by_query_anchors(question, expanded_docs)
-    logs.extend(alogs)
+    for q in expanded_qs:
+        expanded_docs, sublogs = retrieve_parent_documents_expanded(q, dense_k=10)
+        logs.extend(sublogs)
+        expanded_docs, alogs = filter_documents_by_query_anchors(q, expanded_docs)
+        logs.extend(alogs)
+        
+        for doc in expanded_docs:
+            chunk_id = doc.metadata.get("chunk_id") or doc.metadata.get("doc_id") or doc.page_content
+            if chunk_id not in seen_chunk_ids:
+                seen_chunk_ids.add(chunk_id)
+                all_expanded_docs.append(doc)
 
     logs.append(
-        f"Executing Jina Cross-Encoder Rerank (top_n={top_n}) on {len(expanded_docs)} parent documents"
+        f"Executing Jina Cross-Encoder Rerank (top_n={top_n}) on {len(all_expanded_docs)} parent documents"
     )
-    reranked_docs = jina_rerank(question, expanded_docs, top_n=top_n)
+    reranked_docs = jina_rerank(question, all_expanded_docs, top_n=top_n)
+
+    s = get_settings()
+    if s.mmr_enabled and len(reranked_docs) > 1:
+        from src.core.mmr import mmr_filter
+        reranked_docs = mmr_filter(reranked_docs, k=top_n, lambda_param=s.mmr_lambda)
+        logs.append(f"MMR applied: {len(reranked_docs)} docs (lambda={s.mmr_lambda})")
 
     return {"documents": [doc.page_content for doc in reranked_docs], "is_analysis": is_analysis, "logs": logs}
 
@@ -536,6 +586,7 @@ def iter_vector_chat_stream_events(question: str) -> Iterator[Dict[str, Any]]:
     from src.core.citations import build_citations_from_context
 
     inputs: AgentState = {"question": question, "loop_count": 0, "logs": []}
+    inputs.update(expand_query_node(inputs))
     inputs.update(retrieve_and_rerank_node(inputs))
     inputs.update(grade_documents_node(inputs))
     docs = inputs.get("documents") or []
@@ -568,10 +619,12 @@ def iter_chat_stream_events(question: str) -> Iterator[Dict[str, Any]]:
 
 
 workflow = StateGraph(AgentState)
+workflow.add_node("expand_query", expand_query_node)
 workflow.add_node("retrieve", retrieve_and_rerank_node)
 workflow.add_node("grade", grade_documents_node)
 workflow.add_node("generate", generate_node)
-workflow.add_edge(START, "retrieve")
+workflow.add_edge(START, "expand_query")
+workflow.add_edge("expand_query", "retrieve")
 workflow.add_edge("retrieve", "grade")
 workflow.add_edge("grade", "generate")
 workflow.add_edge("generate", END)

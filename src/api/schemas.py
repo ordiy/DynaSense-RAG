@@ -74,6 +74,7 @@ class FeedbackRequest(BaseModel):
     rating: Literal[-1, 0, 1]
     comment: str | None = Field(default=None, max_length=2000)
     tags: list[str] = Field(default_factory=list, max_length=10)
+    trace_id: str | None = Field(default=None, description='LangSmith run ID from the preceding RAG call.')
 
 
 class LoanCompareRequest(BaseModel):

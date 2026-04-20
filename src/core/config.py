@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     )
 
     # --- Hybrid RAG tuning knobs ---
+    mmr_enabled: bool = Field(default=False, description='Apply MMR after Jina reranking.')
+    mmr_lambda: float = Field(default=0.7, ge=0.0, le=1.0, description='MMR tradeoff: 0=diversity, 1=relevance.')
     hybrid_fusion_top_n: int = Field(
         default=5,
         ge=1,
@@ -103,6 +105,24 @@ class Settings(BaseSettings):
         description="Maximum candidate documents passed to Jina cross-encoder reranker in hybrid fusion.",
     )
 
+    # --- Query Expansion ---
+    query_expansion_enabled: bool = Field(
+        default=False,
+        description='Enable LLM query expansion before retrieval. Adds ~1 LLM call but improves recall on synonym/terminology-heavy queries.',
+    )
+
+    # --- MMR Diversification ---
+    mmr_enabled: bool = Field(
+        default=False,
+        description="Apply MMR diversity filter after Jina reranking. Reduces redundant passages; most useful for overview queries.",
+    )
+    mmr_lambda: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="MMR trade-off: 1.0 = pure relevance (rank order), 0.0 = pure diversity.",
+    )
+
     # --- Agentic (ReAct) retrieval ---
     agentic_retrieval_enabled: bool = Field(
         default=False,
@@ -120,9 +140,35 @@ class Settings(BaseSettings):
     )
 
     # --- Ingestion ---
+    image_caption_enabled: bool = Field(
+        default=False,
+        description='Enable Gemini Vision captioning of PDF-embedded images during ingestion. Adds LLM calls per image.'
+    )
     skip_graph_ingest: bool = Field(
         default=False,
         description="Skip LLM triple extraction during document ingestion (e.g. for benchmarks).",
+    )
+
+    # --- Inference ---
+    inference_provider: Literal["vertex", "openai_compat", "anthropic"] = Field(
+        default="vertex",
+        description="The inference provider for LLMs and embeddings. Use openai_compat for NIM/Ollama/vLLM."
+    )
+    inference_llm_model: str = Field(
+        default="gemini-2.5-flash",
+        description="The model name for the LLM."
+    )
+    inference_embedding_model: str = Field(
+        default="text-embedding-004",
+        description="The model name for embeddings."
+    )
+    inference_base_url: str | None = Field(
+        default=None,
+        description="Optional base URL for OpenAI-compatible endpoints."
+    )
+    inference_api_key: str | None = Field(
+        default=None,
+        description="Optional API key for OpenAI-compatible or Anthropic providers."
     )
 
 

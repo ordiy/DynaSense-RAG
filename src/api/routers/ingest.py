@@ -18,7 +18,7 @@ from src.api.upload_validation import (
 )
 from src.core.config import get_settings
 from src.docx_extract import DocxExtractError, extract_text_from_docx_bytes
-from src.pdf_extract import PdfExtractError, extract_text_from_pdf_bytes
+from src.pdf_extract import PdfExtractError, extract_pdf_content
 from src.rag_core import process_document_task
 from src.xlsx_extract import XlsxExtractError, extract_text_from_xlsx_bytes
 
@@ -37,7 +37,7 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
 
     if is_pdf_upload(file.filename, file.content_type):
         try:
-            text_content = extract_text_from_pdf_bytes(content)
+            text_content = extract_pdf_content(content)
         except PdfExtractError as e:
             raise HTTPException(status_code=400, detail=str(e))
         if not text_content.strip():
