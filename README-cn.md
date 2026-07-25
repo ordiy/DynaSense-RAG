@@ -20,11 +20,11 @@
 
 取而代之的是通过以下方式获得高精度：
 1. **智能分块**（Jina Segmenter）
-2. **高维向量检索**（Google Vertex AI `text-embedding-004` + LanceDB）
+2. **高维向量检索**（Google Vertex AI `text-embedding-004` + PostgreSQL pgvector）
 3. **Cross-Encoder 语义重排序**（Jina Multilingual Reranker）
 4. **双轨 Grader + Generator**（LangGraph 状态机 — 事实型查询严格、推理型查询可分析）
 5. **服务端多轮记忆**（带上下文长度控制的会话）
-6. **Hybrid RAG（MVP）** — **Query Router** + **Dense + BM25** + **Neo4j 图谱召回** + 进入打分前的统一 **Top‑K 重排**（见 `docs/mvp_hybrid_rag.md`）
+6. **Hybrid RAG（MVP）** — **Query Router** + **Dense + BM25/FTS** + **PostgreSQL 图谱召回（Apache AGE / `kg_triple`）** + 进入打分前的统一 **Top‑K 重排**（见 `docs/mvp_hybrid_rag.md`）
 
 
 
@@ -42,11 +42,11 @@
                                               │
                     ┌─────────────────────────┴──────────────────────────┐
                     ▼                                                    ▼
-         [ 文档库（MongoMock） ]                    [ Vertex AI Embeddings ]
+         [ 文档库（PostgreSQL JSONB） ]                    [ Vertex AI Embeddings ]
            存储：完整父文本                            text-embedding-004
            键：parent_id  ◄──── parent_id ────────────────────┤
                                                                ▼
-                                                    [ 向量库（LanceDB） ]
+                                                    [ 向量库（pgvector） ]
                                                       存储：稠密向量
                                                       元数据：parent_id
 
@@ -62,7 +62,7 @@
       │                              _build_query_with_history()
       │                                         │
       ▼                                         ▼
-[ LanceDB 向量检索 ]  ←──── 带历史的增强查询
+[ pgvector 向量检索 ]  ←──── 带历史的增强查询
    Top K=10 子块
       │
       ▼
@@ -169,8 +169,8 @@
 ### A/B 记忆策略对比
 `POST /api/chat/session/ab` 对同一条消息并行运行 `prioritized` 与 `legacy` 两种记忆模式，并排返回查询内容、回答与拦截状态，便于快速诊断记忆策略效果。
 
-### Hybrid RAG — 路由 + 双路召回 + Neo4j（MVP）
-实现 **`readme-v2-1.md`**：LLM **意图路由**（`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`）、**双引擎索引**（LanceDB + 带 `chunk_id` 溯源的 Neo4j 三元组）、在线 **Dense + BM25** 与 **图谱线性化** 召回，并在既有 grader/generator 前做 **单次 Jina 重排** 截断为 Top‑5。
+### Hybrid RAG — 路由 + 双路召回 + 图谱（MVP）
+实现 **`readme-v2-1.md`**：LLM **意图路由**（`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`）、在 PostgreSQL 中的 **统一索引**（pgvector + JSONB + 带 `chunk_id` 溯源的图谱三元组）、在线 **Dense + FTS/BM25** 与 **图谱线性化** 召回，并在既有 grader/generator 前做 **单次 Jina 重排** 截断为 Top‑5。
 
 ```text
 用户 Query
@@ -179,7 +179,7 @@
 [ Query Router (LLM) ] ──► VECTOR | GRAPH | GLOBAL | HYBRID
     │
     ├─ VECTOR ──► Dense(Small-to-Big) + BM25(子→父) ──┐
-    ├─ GRAPH ───► Neo4j 子图 → 线性化三元组文本 ─────┤──► [ Jina Rerank Top‑5 ]
+    ├─ GRAPH ───► 图谱子图 → 线性化三元组文本 ─────┤──► [ Jina Rerank Top‑5 ]
     ├─ GLOBAL ──► 图谱摘要 + 小体量稠密锚点 ─────────┤
     └─ HYBRID ──► 合并 VECTOR + GRAPH 候选 ─────────┘
                                         │
@@ -191,14 +191,14 @@
 flowchart TB
   subgraph ingest["离线：双引擎索引"]
     D[原始文档] --> J[Jina 分块]
-    J --> E[Vertex 向量 + LanceDB]
+    J --> E[Vertex 向量 + pgvector]
     J --> T[LLM 三元组抽取]
-    T --> N[(Neo4j + chunk_id 溯源)]
+    T --> N[(PostgreSQL 图谱 + chunk_id 溯源)]
   end
   subgraph online["在线：路由 + 统一重排"]
     Q[用户问题] --> R[Query Router]
     R --> V[VECTOR: dense + BM25]
-    R --> G[GRAPH: Neo4j + 线性化]
+    R --> G[GRAPH: PG 图谱 + 线性化]
     R --> GL[GLOBAL: 图谱摘要 + 稠密锚点]
     R --> HY[HYBRID: 合并候选]
     V --> RR[Jina Cross-Encoder Top-K]
@@ -209,7 +209,7 @@ flowchart TB
   end
 ```
 
-- **本地 Neo4j**：`docker compose -f docker-compose.neo4j.yml up -d`（Bolt `7687`，默认密码 `changeme`）。
+- **PostgreSQL**：`docker compose -f docker-compose.postgres.yml up -d`，并设置 `DATABASE_URL`（见 compose 注释）。
 - **演示语料**：上传 `data/demo_related_party.txt`，可问 *「中国中信银行的关联方有哪些？」* — 日志中常见 `GRAPH` 或 `HYBRID` 且带图谱上下文。
 - **关闭 Hybrid**（回退纯向量 LangGraph）：`export HYBRID_RAG_ENABLED=false`。
 
@@ -221,11 +221,11 @@ flowchart TB
 * **编排**：`LangGraph` & `LangChain`
 * **嵌入模型**：Google Vertex AI `text-embedding-004`
 * **LLM**：Google Vertex AI `gemini-2.5-pro`
-* **向量数据库**：`LanceDB`
+* **数据库**：PostgreSQL（`pgvector` + JSONB + 可选 Apache AGE）
 * **语义分块**：`Jina Segmenter API`
 * **重排序**：`jina-reranker-v2-base-multilingual`
-* **图数据库（Hybrid MVP）**：Neo4j Community（本地 Docker）+ `neo4j` Python 驱动
-* **词法检索**：`rank-bm25`（子块 BM25Okapi）
+* **图（Hybrid MVP）**：PostgreSQL（Apache AGE Cypher，或关系表 `kg_triple` 回退）
+* **词法检索**：PostgreSQL `tsvector` 全文检索（FTS）
 * **会话存储**：带 TTL 的内存 `dict`（可升级为 Redis）
 
 ## 🚀 快速开始
@@ -263,7 +263,7 @@ export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
 | [docs/langsmith_observability.md](./docs/langsmith_observability.md) | **LangSmith 可观测性** — 环境变量、初始化顺序（`src/observability.py`），[官方文档](https://docs.langchain.com/langsmith/observability) |
 | [docs/langgraph_stream_log.md](./docs/langgraph_stream_log.md) | **LangGraph 流式日志** — `LANGGRAPH_STREAM_LOG`、`invoke_rag_app` 中 `stream_mode="values"` |
 | [docs/architecture.md](./docs/architecture.md) | **整洁架构** — `api/`、`core/`、`domain/`、`infrastructure/` 分层与依赖方向 |
-| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — 路由、Dense+BM25、Neo4j、融合重排（`readme-v2-1.md`） |
+| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — 路由、Dense+FTS、PostgreSQL AGE / `kg_triple`、融合重排（`readme-v2-1.md`） |
 | [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — 用例、批量 API、`scripts/run_recall_eval.py` |
 | [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ 基准方案** — `scripts/benchmark_recall_ndcg.py`，报告 `reports/recall_ndcg_benchmark_*.md` |
 | [docs/dual-track-query-routing.md](./docs/dual-track-query-routing.md) | **双轨查询路由** — 分析与事实、grader/生成策略、演示问答 |

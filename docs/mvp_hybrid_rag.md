@@ -72,7 +72,7 @@ Dense vectors excel at **semantic similarity**; BM25 excels at **lexical / rare 
 
 ### 3) Why graph linearization?
 
-Neo4j returns **nodes and edges**. The LLM consumes **text**. We convert each row to a line:
+PostgreSQL graph (Apache AGE or relational `kg_triple`) returns **nodes and edges**. The LLM consumes **text**. We convert each row to a line:
 
 `EntityA —[predicate]→ EntityB (chunk_id=..., source=...)`
 
@@ -80,11 +80,11 @@ So graph evidence participates in the **same reranker** as document chunks.
 
 ### 4) Why LLM triple extraction (MVP)?
 
-Production systems often use **NER + rule-based** or **schema-guided** extraction. For MVP we use **structured-output LLM** triples per chunk to populate Neo4j quickly; `chunk_id` is always attached for **traceability**.
+Production systems often use **NER + rule-based** or **schema-guided** extraction. For MVP we use **structured-output LLM** triples per chunk to populate the PostgreSQL graph quickly; `chunk_id` is always attached for **traceability**.
 
 ### 5) Fail‑closed behavior
 
-If Neo4j is down, `GRAPH` / `GLOBAL` / `HYBRID` **fall back** to `VECTOR` retrieval. If retrieval is empty, the answer path returns the **same blocking message** as the rest of the pipeline.
+If the graph backend is unavailable, `GRAPH` / `GLOBAL` / `HYBRID` **fall back** to `VECTOR` retrieval. If retrieval is empty, the answer path returns the **same blocking message** as the rest of the pipeline.
 
 ---
 
@@ -107,12 +107,14 @@ Use a domain document (e.g. related-party disclosure). After uploading `data/dem
 `POST /api/chat` returns the usual `answer`, `context_used`, `logs`, plus:
 
 - `route` — original router label  
-- `effective_route` — after Neo4j fallbacks  
+- `effective_route` — after graph-backend fallbacks  
 - `router_reason` — short rationale from the router model  
 
 ---
 
 ## References
 
-- `readme-v2-1.md` — product architecture spec  
-- [Neo4j RAG cookbook (Hugging Face)](https://huggingface.co/learn/cookbook/zh-CN/rag_with_knowledge_graphs_neo4j)  
+- `readme-v2-1.md` — product architecture spec (graph layer now PostgreSQL AGE / `kg_triple`; original Neo4j wording is historical)  
+- [Apache AGE](https://age.apache.org/) — PostgreSQL graph extension used when `GRAPH_BACKEND=age`  
+- [Knowledge graphs + RAG cookbook (Hugging Face)](https://huggingface.co/learn/cookbook/zh-CN/rag_with_knowledge_graphs_neo4j) — conceptual reference (implementation here is AGE / SQL, not Neo4j)  
+

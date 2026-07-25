@@ -141,7 +141,7 @@ Palantir：面向业务决策者/运营人员
 
 ### 风险因素
 
-1. **开源平替压力**：LangGraph + Neo4j + dbt Semantic Layer 可以用 1/10 成本拼出类似能力
+1. **开源平替压力**：LangGraph + 图谱（业界常见 Neo4j；本仓库已用 PostgreSQL AGE）+ dbt Semantic Layer 可以用 1/10 成本拼出类似能力
 2. **超大云厂商挤压**：微软/Google/AWS 有天然的企业客户分发渠道
 3. **高价格限制渗透率**：中型企业几乎无法承担 AIP 合同
 

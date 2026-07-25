@@ -266,12 +266,12 @@ export INFERENCE_PROVIDER=vertex       # vertex | openai_compat | anthropic
 | [docs/langgraph_stream_log.md](./docs/langgraph_stream_log.md) | **LangGraph stream logs** — `LANGGRAPH_STREAM_LOG`, `stream_mode="values"` step logs in `invoke_rag_app` |
 | [docs/architecture.md](./docs/architecture.md) | **Clean Architecture** — `api/` / `core/` / `domain/` / `infrastructure/` layout; **`POST /api/analytics/profile`** (controlled CSV/TSV/XLSX profiling, no arbitrary code) |
 | [docs/bitter_lesson_roadmap.md](./docs/bitter_lesson_roadmap.md) | **The Bitter Lesson** — phased roadmap (metrics, learn vs hand-rules, compliance boundaries) |
-| [docs/postgresql_storage_roadmap.md](./docs/postgresql_storage_roadmap.md) | **PostgreSQL + pgvector** — replace LanceDB / Neo4j / MongoMock for simpler GB-scale deployment |
+| [docs/postgresql_storage_roadmap.md](./docs/postgresql_storage_roadmap.md) | **PostgreSQL + pgvector + AGE** — unified storage (LanceDB / Neo4j / MongoMock retired) |
 | [docs/TODO.md](./docs/TODO.md) | **Backlog** — OpenClaw vs RAG boundaries and follow-ups |
 | [docs/testing.md](./docs/testing.md) | **Testing** — pytest layers, `DATABASE_URL`, troubleshooting |
 | [docs/graph_constrained_queries.md](./docs/graph_constrained_queries.md) | **Constrained graph queries** — whitelist templates, debug APIs |
 | [docs/whatif_tools.md](./docs/whatif_tools.md) | **What-If tools** — `/api/whatif/loan/compare`, no-RAG DAG |
-| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — router, dense+BM25, Neo4j, fusion rerank (`readme-v2-1.md`) |
+| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — router, dense+FTS, PostgreSQL AGE / `kg_triple`, fusion rerank (`readme-v2-1.md`) |
 | [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — test cases, batch API, `scripts/run_recall_eval.py` |
 | [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ benchmark plan** — `scripts/benchmark_recall_ndcg.py`, reports `reports/recall_ndcg_benchmark_*.md` |
 | [docs/dual-track-query-routing.md](./docs/dual-track-query-routing.md) | **Dual-Track Query Routing** — analysis vs. factual, grader/generator policies, demo Q&A |

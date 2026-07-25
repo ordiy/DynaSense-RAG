@@ -28,7 +28,7 @@
 ## 4. 测试流程
 
 ```text
-1. 配置环境变量（Vertex、Jina、独立 LanceDB 路径）
+1. 配置环境变量（Vertex、Jina、独立 DATABASE_URL / 评测库）
 2. 从 SciQ train 抽取 N 个不同 support → 建 N 个父文档（带标记）
 3. 从同一数据流中抽取 M 条 question（仅对应已建库 doc_id）
 4. 对每条 question 调用 run_evaluation(query, marker, use_hybrid=...)
@@ -51,9 +51,9 @@ export GOOGLE_CLOUD_PROJECT=...
 export GOOGLE_APPLICATION_CREDENTIALS=...
 export JINA_API_KEY=...
 
-# 独立向量库，避免覆盖业务数据
-export LANCEDB_URI=./data/lancedb_recall_benchmark
-export SKIP_NEO4J_INGEST=1
+# 独立 PostgreSQL 库或 schema，避免覆盖业务数据
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
+export SKIP_GRAPH_INGEST=1
 
 python scripts/benchmark_recall_ndcg.py --num-docs 100 --num-queries 50 --seed 42
 
@@ -83,4 +83,4 @@ python scripts/benchmark_recall_ndcg.py --dry-run
 
 - **API 费用与耗时**：嵌入 + 重排 × 查询数；脚本默认 `--sleep 0.35` 缓解 Jina 限流。
 - **指标含义**：标记在父文档末尾；若分块策略将标记切到单独块且未进 Top-K 子块检索，可能影响结果（一般单 support 较短，风险低）。
-- **Hybrid**：依赖 Neo4j 时部分路由会降级为 VECTOR（评测仍有效）。
+- **Hybrid**：图后端不可用时部分路由会降级为 VECTOR（评测仍有效）。

@@ -1,6 +1,8 @@
 # 需求升级架构-Routing + Hybrid RAG (双路召回)
 提升结构化数据的数据源是高度结构化的 Recall能力
 
+> **实现注记（2026）**：下文设计稿中的 **Neo4j** 已由 **PostgreSQL（Apache AGE Cypher，或关系表 `kg_triple` 回退）** 替代；向量侧为 **pgvector + JSONB**，不再使用 LanceDB。落地说明见 [`docs/mvp_hybrid_rag.md`](docs/mvp_hybrid_rag.md) 与 [`docs/architecture.md`](docs/architecture.md)。
+
 你的直觉非常敏锐，且完全契合当前业界最前沿的 **Adaptive RAG（自适应RAG）** 或 **Agentic RAG（智能体化RAG）** 的设计哲学。
 
 单纯依赖单一检索方式已经无法满足复杂的业务需求。一个合理的、达到企业级生产标准的混合架构，核心就在于你提到的 **“问题分类器（Query Router / Classifier）”**，辅以 **“双引擎索引”** 和 **“统一重排（Reranker）”**。
@@ -14,7 +16,7 @@
 ```text
 [ 阶段一：离线知识构建 (Dual-Engine Indexing) ]
 原始文档 ──┬──> 分块整理 ──> Embedding模型 ──> [ 向量数据库 (DynaSense路线) ]
-           └──> LLM信息抽取 ──> 实体/关系/属性构建 ──> [ 图数据库 Neo4j (GraphRAG路线) ]
+           └──> LLM信息抽取 ──> 实体/关系/属性构建 ──> [ 图数据库 PostgreSQL AGE / kg_triple (GraphRAG路线) ]
                     (注: 实体节点需保留指向原文档Chunk的ID，实现图文互指)
 
 ================================================================================
@@ -30,7 +32,7 @@
    │     └─> 触发 [ DynaSense RAG 引擎 ] ──> 混合检索 (Dense+BM25) ──> Top-K 文本块
    │
    ├─> 意图 B: 多跳关系、复杂拓扑、图谱推理
-   │     └─> 触发 [ Neo4j RAG 引擎 ] ──> Text2Cypher/实体子图检索 ──> Top-K 图拓扑文本/节点集合
+   │     └─> 触发 [ Graph RAG 引擎 ] ──> 关键词/受控 Cypher 子图检索 ──> Top-K 图拓扑文本/节点集合
    │
    ├─> 意图 C: 宏观总结、全局特征 (全局摘要)
    │     └─> 触发 [ 图谱社区检索 (Graph Community) ] ──> 提取图谱高层级聚合信息
@@ -66,8 +68,8 @@
 
 #### 2. 双轨检索层 (Dual-Engine Retrieval) 的协同
 *   **当路由到 DynaSense (向量层) 时**：执行标准的 Query 重写 -> 向量检索 -> BM25 检索 -> 召回 Chunk。
-*   **当路由到 Neo4j (图谱层) 时**：这是难点。图谱查出来的是 JSON 格式的节点和边，LLM 不太好理解。需要将其 **线性化 (Linearization)**。
-    *   *例如，Neo4j 查出的路径转化为文本段落：“张三 (CEO) 管理 公司A；公司A 投资了 公司B。” 将这些转化后的关系文本作为 Context 参与后续步骤。*
+*   **当路由到图谱层时**：这是难点。图谱查出来的是 JSON 格式的节点和边，LLM 不太好理解。需要将其 **线性化 (Linearization)**。
+    *   *例如，AGE / SQL 查出的路径转化为文本段落：“张三 (CEO) 管理 公司A；公司A 投资了 公司B。” 将这些转化后的关系文本作为 Context 参与后续步骤。*
 
 #### 3. 统一融合与重排 (Fusion & Reranking) —— 保证 Top-5 质量的关卡
 如果分类器选择了“双路并发（意图D）”，两边可能会召回 10 个 Chunk 和 5 个关系段落。你怎么选出最终的 Top-5？
@@ -80,7 +82,7 @@
 ### 💡 这种架构的压倒性优势
 
 1.  **极高的健壮性 (Robustness)**：无论用户是像查字典一样查事实（走向量），还是像做侦探一样查关系（走图谱），系统都不会“抓瞎”。
-2.  **成本与延迟可控 (Cost & Latency)**：如果不用分类器，每个问题都跑一次 GraphRAG 的 Text2Cypher 和多路向量召回，系统延迟极高且费钱。有了路由机制，80% 的简单问题可以直接走低成本的 DynaSense 向量通道，只有 20% 的复杂关系推理才去调用厚重的 Neo4j 引擎。
+2.  **成本与延迟可控 (Cost & Latency)**：如果不用分类器，每个问题都跑一次 GraphRAG 子图检索和多路向量召回，系统延迟极高且费钱。有了路由机制，80% 的简单问题可以直接走低成本的 DynaSense 向量通道，只有 20% 的复杂关系推理才去调用图谱引擎。
 3.  **突破“大满贯”瓶颈**：在我的第一份评估中，我们受限于 Top-5 窗口。这种架构通过“重排（Rerank）”做最后把关，确保喂给大模型的 Top-5 永远是“信息密度最高、对回答最有帮助”的上下文组合。
 
 **技术负责人视角总结：**
@@ -98,6 +100,7 @@ A: 在中信银行：2025年度关联交易专项报告中的关联有中信集�
 ```
 
 
-# reference doc 
+# reference doc
+https://age.apache.org/
 https://huggingface.co/learn/cookbook/zh-CN/rag_with_knowledge_graphs_neo4j
-https://neo4j.com/docs/graph-data-science/current/machine-learning/node-embeddings/
+（上列 HF cookbook 为图谱 RAG 概念参考；本仓库实现为 PostgreSQL AGE / `kg_triple`，非 Neo4j。）

@@ -14,8 +14,8 @@ Measure **mean Recall@1,3,5,10** and **mean NDCG@K** (K=1,3,5,10) on a public sc
 
 ## 3. Environment
 
-- `LANCEDB_URI`: isolated benchmark directory (default `./data/lancedb_recall_benchmark`)
-- `SKIP_NEO4J_INGEST=1`: skip graph extraction during ingest
+- `DATABASE_URL`: PostgreSQL connection string (required)
+- `SKIP_GRAPH_INGEST=1`: skip graph extraction during ingest
 - Vertex AI embeddings + Jina reranker (if `JINA_API_KEY` set)
 
 ## 4. Aggregated results

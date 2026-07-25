@@ -20,11 +20,11 @@
 
 代わりに、次の手段で高精度を実現します。
 1. **インテリジェント・チャンキング**（Jina Segmenter）
-2. **高次元ベクトル検索**（Google Vertex AI `text-embedding-004` + LanceDB）
+2. **高次元ベクトル検索**（Google Vertex AI `text-embedding-004` + PostgreSQL pgvector）
 3. **クロスエンコーダによる意味再ランキング**（Jina Multilingual Reranker）
 4. **二系統の Grader + Generator**（LangGraph ステートマシン — 事実クエリは厳格、推論クエリは分析可能）
 5. **サーバー側マルチターン記憶**（文脈長制御付き会話セッション）
-6. **Hybrid RAG（MVP）** — **Query Router** + **Dense + BM25** + **Neo4j グラフ検索** + 採点前の統一 **Top‑K 再ランク**（`docs/mvp_hybrid_rag.md` 参照）
+6. **Hybrid RAG（MVP）** — **Query Router** + **Dense + BM25/FTS** + **PostgreSQL グラフ検索（Apache AGE / `kg_triple`）** + 採点前の統一 **Top‑K 再ランク**（`docs/mvp_hybrid_rag.md` 参照）
 
 
 
@@ -42,11 +42,11 @@
                                               │
                     ┌─────────────────────────┴──────────────────────────┐
                     ▼                                                    ▼
-         [ ドキュメント DB（MongoMock） ]                    [ Vertex AI Embeddings ]
+         [ ドキュメント DB（PostgreSQL JSONB） ]              [ Vertex AI Embeddings ]
            保存: 親テキスト全文                       text-embedding-004
            キー: parent_id  ◄──── parent_id ────────────────────┤
                                                                ▼
-                                                    [ ベクトル DB（LanceDB） ]
+                                                    [ ベクトル DB（pgvector） ]
                                                       保存: 密ベクトル
                                                       メタデータ: parent_id
 
@@ -62,7 +62,7 @@
       │                              _build_query_with_history()
       │                                         │
       ▼                                         ▼
-[ LanceDB ベクトル検索 ]  ←──── 履歴付き拡張クエリ
+[ pgvector ベクトル検索 ]  ←──── 履歴付き拡張クエリ
    Top K=10 子チャンク
       │
       ▼
@@ -169,8 +169,8 @@ HuggingFace の `sciq` データセットのサブセット（1000 文書、100 
 ### A/B メモリ戦略の比較
 `POST /api/chat/session/ab` は同一メッセージに対して `prioritized` と `legacy` の両メモリモードを並列実行し、クエリ本文・回答・ブロック状態を並べて返します。メモリ戦略の効果を迅速に診断できます。
 
-### Hybrid RAG — ルーティング + デュアルリコール + Neo4j（MVP）
-**`readme-v2-1.md`** に基づく実装: LLM **意図ルータ**（`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`）、**デュアル索引**（LanceDB + `chunk_id` 由来情報付き Neo4j トリプル）、オンライン **Dense + BM25** と **グラフ線形化**、既存 grader/generator の前に **単一 Jina 再ランク** で Top‑5 に截断。
+### Hybrid RAG — ルーティング + デュアルリコール + グラフ（MVP）
+**`readme-v2-1.md`** に基づく実装: LLM **意図ルータ**（`VECTOR` / `GRAPH` / `GLOBAL` / `HYBRID`）、PostgreSQL 上の **統一索引**（pgvector + JSONB + `chunk_id` 由来情報付きグラフトリプル）、オンライン **Dense + FTS/BM25** と **グラフ線形化**、既存 grader/generator の前に **単一 Jina 再ランク** で Top‑5 に截断。
 
 ```text
 ユーザー Query
@@ -179,7 +179,7 @@ HuggingFace の `sciq` データセットのサブセット（1000 文書、100 
 [ Query Router (LLM) ] ──► VECTOR | GRAPH | GLOBAL | HYBRID
     │
     ├─ VECTOR ──► Dense(Small-to-Big) + BM25(子→親) ──┐
-    ├─ GRAPH ───► Neo4j 部分グラフ → 線形化トリプル ──┤──► [ Jina Rerank Top‑5 ]
+    ├─ GRAPH ───► グラフ部分グラフ → 線形化トリプル ──┤──► [ Jina Rerank Top‑5 ]
     ├─ GLOBAL ──► グラフ要約 + 小さな dense アンカー ─┤
     └─ HYBRID ──► VECTOR + GRAPH 候補のマージ ────────┘
                                         │
@@ -191,14 +191,14 @@ HuggingFace の `sciq` データセットのサブセット（1000 文書、100 
 flowchart TB
   subgraph ingest["オフライン：デュアルエンジン索引"]
     D[生ドキュメント] --> J[Jina チャンク]
-    J --> E[Vertex 埋め込み + LanceDB]
+    J --> E[Vertex 埋め込み + pgvector]
     J --> T[LLM トリプル抽出]
-    T --> N[(Neo4j + chunk_id)]
+    T --> N[(PostgreSQL graph + chunk_id)]
   end
   subgraph online["オンライン：ルータ + 統一再ランク"]
     Q[ユーザークエリ] --> R[Query Router]
     R --> V[VECTOR: dense + BM25]
-    R --> G[GRAPH: Neo4j + 線形化]
+    R --> G[GRAPH: PG graph + 線形化]
     R --> GL[GLOBAL: グラフ要約 + dense アンカー]
     R --> HY[HYBRID: 候補マージ]
     V --> RR[Jina Cross-Encoder Top-K]
@@ -209,7 +209,7 @@ flowchart TB
   end
 ```
 
-- **ローカル Neo4j**: `docker compose -f docker-compose.neo4j.yml up -d`（Bolt `7687`、既定パスワード `changeme`）。
+- **PostgreSQL**: `docker compose -f docker-compose.postgres.yml up -d` のうえ `DATABASE_URL` を設定（compose のコメント参照）。
 - **デモコーパス**: `data/demo_related_party.txt` をアップロードし *「中国中信银行的关联方有哪些？」* など — ログで `GRAPH` または `HYBRID` とグラフ文脈が典型。
 - **Hybrid 無効化**（ベクトルのみ LangGraph に戻す）: `export HYBRID_RAG_ENABLED=false`。
 
@@ -221,11 +221,11 @@ flowchart TB
 * **オーケストレーション**: `LangGraph` & `LangChain`
 * **埋め込みモデル**: Google Vertex AI `text-embedding-004`
 * **LLM**: Google Vertex AI `gemini-2.5-pro`
-* **ベクトル DB**: `LanceDB`
+* **データベース**: PostgreSQL（`pgvector` + JSONB + 任意の Apache AGE）
 * **意味チャンク分割**: `Jina Segmenter API`
 * **再ランカー**: `jina-reranker-v2-base-multilingual`
-* **グラフ DB（Hybrid MVP）**: Neo4j Community（ローカル Docker）+ Python ドライバ `neo4j`
-* **語彙検索**: `rank-bm25`（子チャンク上の BM25Okapi）
+* **グラフ（Hybrid MVP）**: PostgreSQL（Apache AGE Cypher、または関係表 `kg_triple` フォールバック）
+* **語彙検索**: PostgreSQL `tsvector` 全文検索（FTS）
 * **セッションストア**: TTL 付きインメモリ `dict`（Redis への拡張可能）
 
 ## 🚀 はじめに
@@ -263,7 +263,7 @@ export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/map_rag
 | [docs/langsmith_observability.md](./docs/langsmith_observability.md) | **LangSmith オブザーバビリティ** — 環境変数、初期化順（`src/observability.py`）、[公式ドキュメント](https://docs.langchain.com/langsmith/observability) |
 | [docs/langgraph_stream_log.md](./docs/langgraph_stream_log.md) | **LangGraph ストリームログ** — `LANGGRAPH_STREAM_LOG`、`invoke_rag_app` |
 | [docs/architecture.md](./docs/architecture.md) | **クリーンアーキテクチャ** — `api/` / `core/` / `domain/` / `infrastructure/` |
-| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — ルータ、Dense+BM25、Neo4j、融合再ランク（`readme-v2-1.md`） |
+| [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — ルータ、Dense+FTS、PostgreSQL AGE / `kg_triple`、融合再ランク（`readme-v2-1.md`） |
 | [docs/recall_evaluation.md](./docs/recall_evaluation.md) | **Recall@K / NDCG@K** — ケース、バッチ API、`scripts/run_recall_eval.py` |
 | [docs/recall_ndcg_benchmark_plan.md](./docs/recall_ndcg_benchmark_plan.md) | **SciQ ベンチマーク計画** — `scripts/benchmark_recall_ndcg.py`、レポート `reports/recall_ndcg_benchmark_*.md` |
 | [docs/dual-track-query-routing.md](./docs/dual-track-query-routing.md) | **二系統クエリルーティング** — 分析 vs 事実、Grader/Generator 方針、デモ Q&A |
