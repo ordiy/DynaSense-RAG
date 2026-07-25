@@ -249,14 +249,16 @@ export SKIP_GRAPH_INGEST=false         # set true to skip triple extraction duri
 export INFERENCE_PROVIDER=vertex       # vertex | openai_compat | anthropic
 # export INFERENCE_BASE_URL=http://localhost:11434/v1  # for Ollama/vLLM
 
+# 5b. Demo auth (default on) — console/portal require login
+# export AUTH_ENABLED=true
+# export AUTH_SECRET_KEY=replace-with-a-long-random-string
+# export AUTH_USERS='[{"username":"demo","password":"demo123","display_name":"Demo User"}]'
+
 # 6. Start the web server
 .venv/bin/uvicorn src.app:app --host 0.0.0.0 --port 8000
 
-# Open http://localhost:8000 in your browser
-# Tab 1: Upload documents
-# Tab 2: Single-turn chat
-# Tab 3: Evaluation
-# Tab 4: Multi-turn Chat Test (with Memory + A/B Compare)
+# Open http://localhost:8000 (redirects to /login when AUTH_ENABLED)
+# Default demo user: demo / demo123  (see docs/demo_console_vnext.md)
 ```
 
 ## 📄 Documentation
