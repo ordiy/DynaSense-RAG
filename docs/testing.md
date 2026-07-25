@@ -66,6 +66,20 @@ pytest tests/test_postgres_integration.py tests/test_debug_data.py -v
 
 **处理**：启动 `uvicorn` 前设置 `DATABASE_URL`（见 `README.md` 与 `docker-compose.postgres.yml`）。
 
+## Demo Console VNext（登录 / 会话持久化）
+
+| 文件 | 说明 |
+|------|------|
+| `tests/test_auth_api.py` | 登录 / 登出 / me、AuthGate、`AUTH_ENABLED` 旁路 |
+| `tests/test_conversation_store.py` | `ConversationStore` / `MemoryConversationStore` |
+| `tests/test_session_persistence_api.py` | 会话 list/chat/get/delete（mock `run_chat_pipeline`） |
+| `tests/test_console_static.py` | 侧栏布局、`login.html`、DDL |
+| `tests/test_portal_static.py` | portal 静态资源；未登录 `/demo` → `/login` |
+
+Fixtures：`demo_auth_enabled`、`auth_disabled`（见 `tests/conftest.py`）。默认 `AUTH_ENABLED=true`；全栈 smoke 使用 `auth_disabled`。
+
+方案说明：[`demo_console_vnext.md`](./demo_console_vnext.md)。
+
 ## 与存储相关的历史说明
 
 存储已统一为 **PostgreSQL**（JSONB + pgvector + 可选 AGE）。旧版 LanceDB / MongoMock / Neo4j 路径已移除；回归以本文命令与 `DATABASE_URL` 为准。

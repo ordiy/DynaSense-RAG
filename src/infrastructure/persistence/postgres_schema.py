@@ -58,6 +58,35 @@ def _feedback_table_ddl() -> list[str]:
     ]
 
 
+def _conversation_tables_ddl() -> list[str]:
+    """Demo console: durable multi-turn chat history per user."""
+    return [
+        """
+        CREATE TABLE IF NOT EXISTS chat_conversation (
+            id          TEXT PRIMARY KEY,
+            user_id     TEXT NOT NULL,
+            title       TEXT NOT NULL DEFAULT '',
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS chat_conversation_user_updated "
+        "ON chat_conversation (user_id, updated_at DESC)",
+        """
+        CREATE TABLE IF NOT EXISTS chat_message (
+            id               TEXT PRIMARY KEY,
+            conversation_id  TEXT NOT NULL REFERENCES chat_conversation(id) ON DELETE CASCADE,
+            role             TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+            content          TEXT NOT NULL,
+            meta             JSONB NOT NULL DEFAULT '{}',
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS chat_message_conv_created "
+        "ON chat_message (conversation_id, created_at)",
+    ]
+
+
 def _kg_triple_ddl() -> list[str]:
     """Relational triple store — used only when Apache AGE is not available."""
     return [
@@ -94,6 +123,8 @@ def ensure_schema(pool) -> None:
         for stmt in _kb_tables_ddl():
             conn.execute(stmt)
         for stmt in _feedback_table_ddl():
+            conn.execute(stmt)
+        for stmt in _conversation_tables_ddl():
             conn.execute(stmt)
         conn.commit()
 

@@ -17,19 +17,22 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_openapi_and_pages_exist():
+def test_openapi_and_pages_exist(auth_disabled):
     from fastapi.testclient import TestClient
 
-    from src.app import app
+    from src.api.main import create_app
 
-    c = TestClient(app)
+    c = TestClient(create_app())
     assert c.get("/").status_code == 200
     assert c.get("/demo").status_code == 200
+    assert c.get("/login").status_code == 200
     assert c.get("/portal", follow_redirects=False).status_code == 302
     spec = c.get("/openapi.json").json()
     paths = spec.get("paths", {})
     assert "/api/chat" in paths
     assert "/api/chat/stream" in paths
+    assert "/api/chat/sessions" in paths
+    assert "/api/auth/login" in paths
     assert "/api/upload" in paths
     assert "/api/feedback" in paths
     assert "/api/whatif/loan/compare" in paths

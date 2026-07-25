@@ -4,62 +4,137 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MAP-RAG · Engineer Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
-            --bg: #0f1117;
-            --surface: #171923;
-            --surface2: #1e2130;
-            --border: rgba(255,255,255,0.07);
-            --accent: #38bdf8;
-            --accent2: #818cf8;
-            --success: #34d399;
-            --warning: #fb923c;
-            --text: #e2e8f0;
+            --bg: #f4f6f8;
+            --surface: #ffffff;
+            --surface2: #eef2f6;
+            --border: #d9e2ec;
+            --sidebar: #0f2744;
+            --sidebar-text: #c5d4e8;
+            --sidebar-active: #0d9488;
+            --accent: #0d9488;
+            --accent2: #1e3a5f;
+            --success: #059669;
+            --warning: #c2410c;
+            --text: #0f172a;
             --muted: #64748b;
-            --radius: 10px;
+            --radius: 8px;
+            --sidebar-w: 248px;
         }
         *, *::before, *::after { box-sizing: border-box; }
         html { font-size: 15px; }
         body {
             background: var(--bg);
             color: var(--text);
-            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            font-family: 'IBM Plex Sans', system-ui, sans-serif;
             min-height: 100vh;
+            margin: 0;
         }
 
-        /* ── Top navbar ── */
+        /* ── App shell: left sidebar ── */
+        .app-shell {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: var(--sidebar-w);
+            flex-shrink: 0;
+            background: var(--sidebar);
+            color: var(--sidebar-text);
+            display: flex;
+            flex-direction: column;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            border-right: 1px solid rgba(255,255,255,0.06);
+        }
+        .sidebar-brand {
+            display: flex; align-items: center; gap: 0.7rem;
+            padding: 1.25rem 1.1rem 1rem;
+            text-decoration: none; color: #fff;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .sidebar-logo {
+            width: 34px; height: 34px;
+            background: linear-gradient(145deg, #1e3a5f, #0d9488);
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.8rem; font-weight: 700; color: #fff;
+        }
+        .sidebar-name {
+            font-family: 'Source Serif 4', Georgia, serif;
+            font-weight: 600; font-size: 1.05rem; color: #fff;
+        }
+        .sidebar-name span {
+            display: block;
+            font-family: 'IBM Plex Sans', sans-serif;
+            font-weight: 400; font-size: 0.72rem;
+            color: var(--sidebar-text); margin-top: 0.1rem;
+        }
+        .sidebar-nav {
+            list-style: none; margin: 0.75rem 0 0; padding: 0 0.6rem;
+            flex: 1; overflow-y: auto;
+        }
+        .sidebar-nav .nav-link {
+            display: block;
+            width: 100%;
+            text-align: left;
+            color: var(--sidebar-text);
+            border: none;
+            background: transparent;
+            border-radius: 8px;
+            font-size: 0.86rem; font-weight: 500;
+            padding: 0.65rem 0.85rem;
+            margin-bottom: 0.2rem;
+            transition: background 0.15s, color 0.15s;
+        }
+        .sidebar-nav .nav-link:hover { color: #fff; background: rgba(255,255,255,0.06); }
+        .sidebar-nav .nav-link.active {
+            color: #fff;
+            background: rgba(13,148,136,0.28);
+            box-shadow: inset 3px 0 0 var(--sidebar-active);
+        }
+        .sidebar-footer {
+            padding: 0.9rem 1rem 1.1rem;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            font-size: 0.78rem;
+        }
+        .sidebar-user { color: #fff; font-weight: 600; margin-bottom: 0.35rem; }
+        .sidebar-user span { color: var(--sidebar-text); font-weight: 400; }
+        .sidebar-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+        .demo-link, .btn-logout {
+            font-size: 0.74rem; color: #99f6e4; text-decoration: none;
+            padding: 0.25rem 0.55rem;
+            border: 1px solid rgba(13,148,136,0.45);
+            border-radius: 6px;
+            background: transparent;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .demo-link:hover, .btn-logout:hover { background: rgba(13,148,136,0.15); color: #fff; }
+
+        .main-column { flex: 1; min-width: 0; display: flex; flex-direction: column; }
         .topbar {
             position: sticky; top: 0; z-index: 100;
-            background: rgba(15,17,23,0.92);
-            backdrop-filter: blur(14px);
+            background: rgba(244,246,248,0.92);
+            backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--border);
             padding: 0 1.5rem;
             height: 54px;
-            display: flex; align-items: center; justify-content: space-between;
+            display: flex; align-items: center; justify-content: flex-end;
             gap: 1rem;
         }
-        .topbar-brand {
-            display: flex; align-items: center; gap: 0.65rem;
-            text-decoration: none; color: inherit;
-            flex-shrink: 0;
-        }
-        .topbar-logo {
-            width: 30px; height: 30px;
-            background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
-            border-radius: 8px;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 0.85rem; font-weight: 800; color: #fff; letter-spacing: -0.5px;
-        }
-        .topbar-name { font-weight: 700; font-size: 0.95rem; color: var(--text); }
-        .topbar-name span { color: var(--muted); font-weight: 400; font-size: 0.8rem; margin-left: 0.4rem; }
-        .topbar-right { display: flex; align-items: center; gap: 0.75rem; }
         .feedback-chip {
             display: flex; align-items: center; gap: 0.5rem;
-            background: var(--surface2);
+            background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 20px;
+            border-radius: 8px;
             padding: 0.3rem 0.75rem;
             font-size: 0.78rem; color: var(--muted);
         }
@@ -69,47 +144,75 @@
             color: var(--accent); font-size: 0.78rem; cursor: pointer; padding: 0;
         }
         .btn-refresh:hover { opacity: 0.75; }
-        .demo-link {
-            font-size: 0.78rem; color: var(--accent); text-decoration: none;
-            padding: 0.3rem 0.75rem;
-            border: 1px solid rgba(56,189,248,0.25);
-            border-radius: 20px;
-            transition: background 0.15s;
-        }
-        .demo-link:hover { background: rgba(56,189,248,0.08); color: var(--accent); }
 
-        /* ── Main layout ── */
         .page-wrap {
-            max-width: 1080px;
+            max-width: 1180px;
+            width: 100%;
             margin: 0 auto;
-            padding: 2rem 1.5rem 4rem;
+            padding: 1.5rem 1.5rem 3.5rem;
         }
 
-        /* ── Nav pills ── */
-        .nav-pills-custom {
-            display: flex; gap: 0.25rem;
-            flex-wrap: wrap;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 0;
-            margin-bottom: 1.75rem;
+        /* chat history layout */
+        .chat-layout {
+            display: grid;
+            grid-template-columns: 240px 1fr;
+            gap: 1rem;
+            min-height: 520px;
         }
-        .nav-pills-custom .nav-link {
-            color: var(--muted);
-            border-radius: var(--radius) var(--radius) 0 0;
-            font-size: 0.84rem; font-weight: 500;
-            padding: 0.55rem 1.1rem;
+        @media (max-width: 900px) {
+            .chat-layout { grid-template-columns: 1fr; }
+            .sidebar { position: relative; height: auto; width: 100%; }
+            .app-shell { flex-direction: column; }
+        }
+        .session-panel {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.75rem;
+            display: flex; flex-direction: column;
+            max-height: 640px;
+        }
+        .session-panel-h {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 0.6rem;
+            font-size: 0.8rem; font-weight: 600; color: var(--text);
+        }
+        .session-list {
+            overflow-y: auto; flex: 1;
+            display: flex; flex-direction: column; gap: 0.35rem;
+        }
+        .session-item {
+            text-align: left;
             border: 1px solid transparent;
-            border-bottom: none;
-            margin-bottom: -1px;
-            background: transparent;
-            transition: color 0.15s;
-        }
-        .nav-pills-custom .nav-link:hover { color: var(--text); }
-        .nav-pills-custom .nav-link.active {
-            color: var(--accent);
             background: var(--surface);
-            border-color: var(--border);
-            border-bottom-color: var(--surface);
+            border-radius: 6px;
+            padding: 0.55rem 0.6rem;
+            cursor: pointer;
+            font-size: 0.78rem;
+            color: var(--text);
+            width: 100%;
+        }
+        .session-item:hover { border-color: var(--border); }
+        .session-item.active {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px rgba(13,148,136,0.25);
+        }
+        .session-item .sid { color: var(--muted); font-size: 0.68rem; margin-top: 0.2rem; }
+        .session-item .sdel {
+            float: right; border: none; background: none; color: var(--muted);
+            cursor: pointer; font-size: 0.85rem; padding: 0 0.2rem;
+        }
+        .session-item .sdel:hover { color: var(--warning); }
+        .btn-new-session {
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--accent);
+            border-radius: 6px;
+            font-size: 0.74rem;
+            font-weight: 600;
+            padding: 0.25rem 0.55rem;
+            cursor: pointer;
+            font-family: inherit;
         }
 
         /* ── Cards ── */
@@ -118,6 +221,7 @@
             border: 1px solid var(--border);
             border-radius: var(--radius);
             padding: 1.5rem;
+            box-shadow: 0 1px 2px rgba(15,39,68,0.04);
             margin-bottom: 1rem;
         }
         .panel-title {
@@ -189,8 +293,8 @@
 
         /* ── Forms ── */
         .form-control-dark {
-            background: rgba(0,0,0,0.25);
-            border: 1px solid rgba(255,255,255,0.12);
+            background: #fff;
+            border: 1px solid var(--border);
             border-radius: 8px;
             color: var(--text);
             font-size: 0.88rem;
@@ -202,40 +306,40 @@
         .form-control-dark:focus {
             outline: none;
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(56,189,248,0.15);
-            background: rgba(0,0,0,0.35);
+            box-shadow: 0 0 0 3px rgba(13,148,136,0.15);
+            background: #fff;
             color: var(--text);
         }
         .form-label-sm { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; display: block; }
-        .form-check-dark .form-check-input { background-color: var(--surface2); border-color: rgba(255,255,255,0.2); }
+        .form-check-dark .form-check-input { background-color: #fff; border-color: var(--border); }
         .form-check-dark .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
         .form-check-dark .form-check-label { font-size: 0.84rem; color: var(--muted); }
 
         /* ── Buttons ── */
         .btn-primary-custom {
-            background: linear-gradient(135deg, #38bdf8, #818cf8);
+            background: #0f2744;
             border: none; border-radius: 8px;
             color: #fff; font-weight: 600; font-size: 0.85rem;
             padding: 0.6rem 1.25rem; cursor: pointer;
             transition: opacity 0.15s, transform 0.1s;
             white-space: nowrap;
         }
-        .btn-primary-custom:hover { opacity: 0.88; }
+        .btn-primary-custom:hover { opacity: 0.9; }
         .btn-primary-custom:active { transform: scale(0.98); }
         .btn-primary-custom:disabled { opacity: 0.45; cursor: not-allowed; }
 
         .btn-success-custom {
-            background: linear-gradient(135deg, #34d399, #10b981);
+            background: var(--accent);
             border: none; border-radius: 8px;
             color: #fff; font-weight: 600; font-size: 0.85rem;
             padding: 0.6rem 1.25rem; cursor: pointer;
             transition: opacity 0.15s;
         }
-        .btn-success-custom:hover { opacity: 0.88; }
+        .btn-success-custom:hover { opacity: 0.9; }
 
         .btn-outline-custom {
             background: transparent;
-            border: 1px solid rgba(255,255,255,0.15);
+            border: 1px solid var(--border);
             border-radius: 8px;
             color: var(--text); font-size: 0.85rem;
             padding: 0.55rem 1.1rem; cursor: pointer;
@@ -244,35 +348,38 @@
         .btn-outline-custom:hover { border-color: var(--accent); color: var(--accent); }
 
         .btn-warn-custom {
-            background: linear-gradient(135deg, #fb923c, #f59e0b);
+            background: #c2410c;
             border: none; border-radius: 8px;
             color: #fff; font-weight: 600; font-size: 0.85rem;
             padding: 0.6rem 1.25rem; cursor: pointer;
             transition: opacity 0.15s;
         }
-        .btn-warn-custom:hover { opacity: 0.88; }
+        .btn-warn-custom:hover { opacity: 0.9; }
 
         /* ── Log box ── */
         .log-box {
-            background: #090b10;
-            color: #7dd3fc;
+            background: #0f2744;
+            color: #c5d4e8;
             padding: 1rem;
             border-radius: 8px;
             height: 230px;
             overflow-y: auto;
             font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
             font-size: 0.78rem;
-            border: 1px solid rgba(56,189,248,0.12);
+            border: 1px solid #1e3a5f;
             line-height: 1.55;
         }
         .log-box.answer-box {
+            background: #fff;
             color: var(--text);
+            border: 1px solid var(--border);
             height: auto; min-height: 80px;
             font-family: inherit;
             font-size: 0.88rem;
         }
+        .log-box.chat-box { background: #fff; color: var(--text); border: 1px solid var(--border); }
         .log-box::-webkit-scrollbar { width: 6px; }
-        .log-box::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+        .log-box::-webkit-scrollbar-thumb { background: rgba(15,39,68,0.25); border-radius: 3px; }
 
         /* ── Chat box ── */
         .chat-box { height: 380px; overflow-y: auto; }
@@ -377,56 +484,48 @@
 </head>
 <body>
 
-<!-- Top navigation bar -->
-<header class="topbar">
-    <a class="topbar-brand" href="/">
-        <div class="topbar-logo">MR</div>
-        <span class="topbar-name">MAP-RAG <span>Engineer Console</span></span>
-    </a>
-    <div class="topbar-right">
+<div class="app-shell" id="appShell">
+    <aside class="sidebar" id="appSidebar">
+        <a class="sidebar-brand" href="/">
+            <div class="sidebar-logo">MR</div>
+            <div class="sidebar-name">MAP-RAG<span>Engineer Console</span></div>
+        </a>
+        <ul class="nav sidebar-nav flex-column" id="mainTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="tab-upload" data-bs-toggle="tab" data-bs-target="#pane-upload" type="button" role="tab">Data Ingestion</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="tab-chat" data-bs-toggle="tab" data-bs-target="#pane-chat" type="button" role="tab">RAG Chat</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="tab-eval" data-bs-toggle="tab" data-bs-target="#pane-eval" type="button" role="tab">Evaluation</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="tab-chattest" data-bs-toggle="tab" data-bs-target="#pane-chattest" type="button" role="tab">Chat Test</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="tab-vectors" data-bs-toggle="tab" data-bs-target="#pane-vectors" type="button" role="tab">Vectors</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="tab-graph" data-bs-toggle="tab" data-bs-target="#pane-graph" type="button" role="tab">Graph</button>
+            </li>
+        </ul>
+        <div class="sidebar-footer">
+            <div class="sidebar-user" id="sidebarUserLabel">Signed in as <span id="sidebarUserName">…</span></div>
+            <div class="sidebar-actions">
+                <a class="demo-link" href="/demo" target="_blank">Customer Demo</a>
+                <button type="button" class="btn-logout" id="btnLogout">Sign out</button>
+            </div>
+        </div>
+    </aside>
+    <div class="main-column">
+    <header class="topbar">
         <div class="feedback-chip">
             <span id="feedbackSummaryText">–</span>
             <button class="btn-refresh" id="btnFeedbackRefresh" title="Refresh feedback stats">↻</button>
         </div>
-        <a class="demo-link" href="/demo" target="_blank">Customer Demo ↗</a>
-    </div>
-</header>
-
-<div class="page-wrap">
-    <!-- Nav tabs -->
-    <ul class="nav nav-pills-custom" id="mainTab" role="tablist">
-        <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="tab-upload" data-bs-toggle="tab" data-bs-target="#pane-upload" type="button" role="tab">
-                Data Ingestion
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tab-chat" data-bs-toggle="tab" data-bs-target="#pane-chat" type="button" role="tab">
-                RAG Chat
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tab-eval" data-bs-toggle="tab" data-bs-target="#pane-eval" type="button" role="tab">
-                Evaluation
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tab-chattest" data-bs-toggle="tab" data-bs-target="#pane-chattest" type="button" role="tab">
-                Chat Test
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tab-vectors" data-bs-toggle="tab" data-bs-target="#pane-vectors" type="button" role="tab">
-                Vectors
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tab-graph" data-bs-toggle="tab" data-bs-target="#pane-graph" type="button" role="tab">
-                Graph
-            </button>
-        </li>
-    </ul>
-
+    </header>
+    <div class="page-wrap">
     <div class="tab-content" id="mainTabContent">
 
         <!-- ── 1. Data Ingestion ── -->
@@ -482,33 +581,47 @@
 
         <!-- ── 2. RAG Chat ── -->
         <div class="tab-pane fade" id="pane-chat" role="tabpanel">
-            <div class="panel">
-                <div class="panel-title">Query the Knowledge Base</div>
-                <div class="panel-sub">Send a question through the full RAG pipeline (retrieve → grade → generate). Stream mode delivers tokens as they arrive.</div>
+            <div class="chat-layout" id="chatHistoryLayout">
+                <aside class="session-panel" id="sessionPanel">
+                    <div class="session-panel-h">
+                        <span>Conversations</span>
+                        <button type="button" class="btn-new-session" id="btnNewSession" onclick="startNewChatSession()">New</button>
+                    </div>
+                    <div class="session-list" id="sessionList">
+                        <div class="empty-state" style="padding:1rem 0.5rem;font-size:0.78rem;">No conversations yet.</div>
+                    </div>
+                </aside>
+                <div class="panel" style="margin:0;">
+                    <div class="panel-title">Query the Knowledge Base</div>
+                    <div class="panel-sub">Multi-turn chat with persisted history. Uses the session pipeline (retrieve → grade → generate).</div>
 
-                <div class="d-flex gap-2 mb-3">
-                    <input type="text" class="form-control-dark" id="chatQuery" placeholder="e.g. What are the key compliance requirements?">
-                    <button class="btn-success-custom" type="button" onclick="sendChat()">Send</button>
-                    <button class="btn-outline-custom" type="button" onclick="sendChatStream()">Stream</button>
-                </div>
+                    <div class="d-flex gap-2 mb-3">
+                        <input type="text" class="form-control-dark" id="chatQuery" placeholder="e.g. What are the key compliance requirements?">
+                        <button class="btn-success-custom" type="button" onclick="sendChat()">Send</button>
+                        <button class="btn-outline-custom" type="button" onclick="sendChatStream()" title="One-shot stream without session history">Stream</button>
+                    </div>
 
-                <div id="chatRouteWrap" style="display:none;" class="mb-2">
-                    <span class="route-info" id="chatRouteInfo"></span>
-                </div>
+                    <div id="chatRouteWrap" style="display:none;" class="mb-2">
+                        <span class="route-info" id="chatRouteInfo"></span>
+                    </div>
 
-                <div class="section-h">Execution Trace</div>
-                <div class="log-box mb-3" id="chatLogs">Waiting for query…</div>
+                    <div class="section-h">Conversation</div>
+                    <div class="log-box chat-box mb-3" id="chatThread" style="min-height:180px;">Start a conversation or select one from the left.</div>
 
-                <div class="section-h">Answer</div>
-                <div class="log-box answer-box mb-2" id="chatAnswer">—</div>
+                    <div class="section-h">Execution Trace</div>
+                    <div class="log-box mb-3" id="chatLogs">Waiting for query…</div>
 
-                <div id="chatCitations"></div>
+                    <div class="section-h">Latest Answer</div>
+                    <div class="log-box answer-box mb-2" id="chatAnswer">—</div>
 
-                <div class="fb-row" id="chatFeedbackRow">
-                    <span>Was this answer helpful?</span>
-                    <button type="button" class="fb-btn fb-console" data-rating="1" title="Helpful">&#128077;</button>
-                    <button type="button" class="fb-btn fb-console" data-rating="-1" title="Needs improvement">&#128078;</button>
-                    <span class="fb-done" id="chatFeedbackDone"></span>
+                    <div id="chatCitations"></div>
+
+                    <div class="fb-row" id="chatFeedbackRow">
+                        <span>Was this answer helpful?</span>
+                        <button type="button" class="fb-btn fb-console" data-rating="1" title="Helpful">&#128077;</button>
+                        <button type="button" class="fb-btn fb-console" data-rating="-1" title="Needs improvement">&#128078;</button>
+                        <span class="fb-done" id="chatFeedbackDone"></span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -655,9 +768,119 @@
 
     </div><!-- /tab-content -->
 </div><!-- /page-wrap -->
+</div><!-- /main-column -->
+</div><!-- /app-shell -->
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+
+// ── Auth + fetch credentials ───────────────────────────────────
+const apiFetch = (url, opts = {}) => fetch(url, { credentials: 'same-origin', ...opts });
+let activeConversationId = null;
+let chatThreadMessages = [];
+
+async function loadCurrentUser() {
+    try {
+        const res = await apiFetch('/api/auth/me');
+        if (res.status === 401) { location.href = '/login?next=/'; return; }
+        const data = await res.json();
+        const el = document.getElementById('sidebarUserName');
+        if (el) el.textContent = data.display_name || data.username || 'User';
+    } catch (_) {}
+}
+
+async function logoutConsole() {
+    try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
+    location.href = '/login';
+}
+
+function renderChatThread() {
+    const box = document.getElementById('chatThread');
+    if (!box) return;
+    if (!chatThreadMessages.length) {
+        box.innerHTML = 'Start a conversation or select one from the left.';
+        return;
+    }
+    box.innerHTML = chatThreadMessages.map(m => {
+        const label = m.role === 'user' ? 'You' : 'Assistant';
+        const content = m.role === 'assistant'
+            ? marked.parse(m.content || '', { renderer: safeRenderer })
+            : escapeHtml(m.content || '');
+        return `<div style="margin-bottom:12px;"><b style="color:${m.role==='user'?'#0f766e':'#1e3a5f'}">${label}</b><div style="margin-top:4px;">${content}</div></div>`;
+    }).join('');
+    box.scrollTop = box.scrollHeight;
+}
+
+async function refreshSessionList() {
+    const list = document.getElementById('sessionList');
+    if (!list) return;
+    try {
+        const res = await apiFetch('/api/chat/sessions?limit=50');
+        if (!res.ok) { list.innerHTML = '<div class="empty-state" style="font-size:0.78rem;">Unable to load sessions.</div>'; return; }
+        const data = await res.json();
+        const sessions = data.sessions || [];
+        if (!sessions.length) {
+            list.innerHTML = '<div class="empty-state" style="padding:1rem 0.5rem;font-size:0.78rem;">No conversations yet.</div>';
+            return;
+        }
+        list.innerHTML = sessions.map(s => {
+            const active = s.conversation_id === activeConversationId ? ' active' : '';
+            return `<div class="session-item${active}" data-cid="${escapeHtml(s.conversation_id)}">
+                <button type="button" class="sdel" data-del="${escapeHtml(s.conversation_id)}" title="Delete">×</button>
+                <div>${escapeHtml(s.title || 'Conversation')}</div>
+                <div class="sid">${escapeHtml((s.conversation_id || '').slice(0, 8))}…</div>
+            </div>`;
+        }).join('');
+        list.querySelectorAll('.session-item').forEach(el => {
+            el.addEventListener('click', (ev) => {
+                if (ev.target.closest('.sdel')) return;
+                selectChatSession(el.getAttribute('data-cid'));
+            });
+        });
+        list.querySelectorAll('.sdel').forEach(btn => {
+            btn.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                const cid = btn.getAttribute('data-del');
+                if (!cid || !confirm('Delete this conversation?')) return;
+                await apiFetch('/api/chat/session/' + encodeURIComponent(cid), { method: 'DELETE' });
+                if (activeConversationId === cid) startNewChatSession();
+                else refreshSessionList();
+            });
+        });
+    } catch (e) {
+        list.innerHTML = '<div class="empty-state" style="font-size:0.78rem;">' + escapeHtml(String(e)) + '</div>';
+    }
+}
+
+function startNewChatSession() {
+    activeConversationId = null;
+    chatThreadMessages = [];
+    renderChatThread();
+    document.getElementById('chatAnswer').innerHTML = '—';
+    document.getElementById('chatLogs').textContent = 'Waiting for query…';
+    document.getElementById('chatCitations').innerHTML = '';
+    hideConsoleChatFeedback();
+    refreshSessionList();
+}
+
+async function selectChatSession(cid) {
+    activeConversationId = cid;
+    const res = await apiFetch('/api/chat/session/' + encodeURIComponent(cid));
+    if (!res.ok) { alert('Could not load conversation'); return; }
+    const data = await res.json();
+    chatThreadMessages = data.history || [];
+    renderChatThread();
+    const last = [...chatThreadMessages].reverse().find(m => m.role === 'assistant');
+    document.getElementById('chatAnswer').innerHTML = last
+        ? marked.parse(last.content || '', { renderer: safeRenderer }) : '—';
+    refreshSessionList();
+}
+
+document.getElementById('btnLogout')?.addEventListener('click', logoutConsole);
+document.getElementById('tab-chat')?.addEventListener('shown.bs.tab', () => refreshSessionList());
+loadCurrentUser();
+refreshSessionList();
+
 // ── Utilities ──────────────────────────────────────────────────
 function escapeHtml(str) {
     return String(str)
@@ -724,7 +947,7 @@ async function uploadFile() {
     document.getElementById('progressPct').textContent = '0%';
 
     try {
-        const response = await fetch('/api/upload', { method: 'POST', body: formData });
+        const response = await apiFetch('/api/upload', { method: 'POST', body: formData });
         const data = await response.json();
         if (!response.ok) {
             document.getElementById('statusText').textContent = 'Error: ' + (data.detail || response.status);
@@ -741,7 +964,7 @@ async function pollTaskStatus(taskId) {
     const bar = document.getElementById('progressBar');
     const interval = setInterval(async () => {
         try {
-            const res  = await fetch('/api/tasks/' + taskId);
+            const res  = await apiFetch('/api/tasks/' + taskId);
             const data = await res.json();
             const pct  = data.progress || 0;
             bar.style.width = pct + '%';
@@ -763,7 +986,7 @@ async function loadFeedbackSummary() {
     const el = document.getElementById('feedbackSummaryText');
     el.textContent = '…';
     try {
-        const res  = await fetch('/api/feedback/summary');
+        const res  = await apiFetch('/api/feedback/summary');
         const data = await res.json().catch(() => ({}));
         if (!res.ok) { el.textContent = 'Error ' + res.status; return; }
         const br = data.by_rating || {};
@@ -774,7 +997,7 @@ async function loadFeedbackSummary() {
 }
 
 async function postFeedbackPayload(body) {
-    const res = await fetch('/api/feedback', {
+    const res = await apiFetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -800,7 +1023,7 @@ function hideConsoleChatFeedback() {
 async function submitConsoleChatFeedback(rating) {
     if (!lastConsoleChatQuery) return;
     document.getElementById('chatFeedbackRow')?.querySelectorAll('.fb-console').forEach(b => b.disabled = true);
-    const ok   = await postFeedbackPayload({ query: lastConsoleChatQuery, rating, conversation_id: null, comment: null, tags: ['console', 'rag_chat'] });
+    const ok   = await postFeedbackPayload({ query: lastConsoleChatQuery, rating, conversation_id: activeConversationId, comment: null, tags: ['console', 'rag_chat'] });
     const done = document.getElementById('chatFeedbackDone');
     if (done) done.textContent = ok ? 'Recorded — thank you' : 'Submit failed';
 }
@@ -850,22 +1073,33 @@ async function sendChat() {
     document.getElementById('chatCitations').innerHTML = '';
     document.getElementById('chatRouteWrap').style.display = 'none';
     hideConsoleChatFeedback();
+    chatThreadMessages.push({ role: 'user', content: query });
+    renderChatThread();
+    document.getElementById('chatQuery').value = '';
     try {
-        const response = await fetch('/api/chat', {
+        const response = await apiFetch('/api/chat/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query })
+            body: JSON.stringify({
+                conversation_id: activeConversationId,
+                message: query,
+                memory_mode: 'prioritized',
+            })
         });
         const data = await response.json();
         if (!response.ok) {
             document.getElementById('chatAnswer').textContent = (data && data.detail) ? JSON.stringify(data.detail) : ('HTTP ' + response.status);
             return;
         }
+        activeConversationId = data.conversation_id || activeConversationId;
+        chatThreadMessages = data.history || chatThreadMessages.concat([{ role: 'assistant', content: data.answer || '' }]);
+        renderChatThread();
         document.getElementById('chatLogs').textContent = (data.logs || []).join('\n') + '\n\nDone.';
-        document.getElementById('chatAnswer').innerHTML = marked.parse(data.answer, { renderer: safeRenderer });
+        document.getElementById('chatAnswer').innerHTML = marked.parse(data.answer || '', { renderer: safeRenderer });
         renderHybridRouteInfo(data);
         renderChatCitations(data.citations || []);
         showConsoleChatFeedback(query);
+        refreshSessionList();
     } catch (err) {
         document.getElementById('chatAnswer').textContent = 'Error: ' + err;
         hideConsoleChatFeedback();
@@ -881,7 +1115,7 @@ async function sendChatStream() {
     document.getElementById('chatRouteWrap').style.display = 'none';
     hideConsoleChatFeedback();
     try {
-        const response = await fetch('/api/chat/stream', {
+        const response = await apiFetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query })
@@ -954,7 +1188,7 @@ async function runEval() {
     if (!query || !expected) return;
     document.getElementById('evalResults').style.display = 'none';
     try {
-        const response = await fetch('/api/evaluate', {
+        const response = await apiFetch('/api/evaluate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query, expected_substring: expected, use_hybrid: useHybrid })
@@ -987,7 +1221,7 @@ async function loadLanceSummary() {
     const el = document.getElementById('lanceSummaryOut');
     el.textContent = 'Loading…';
     try {
-        const res  = await fetch('/api/debug/pg/kb_embedding/summary');
+        const res  = await apiFetch('/api/debug/pg/kb_embedding/summary');
         const data = await res.json().catch(() => ({}));
         el.textContent = res.ok ? JSON.stringify(data, null, 2) : 'Error: ' + (data.detail || res.status);
     } catch (e) { el.textContent = String(e); }
@@ -1007,7 +1241,7 @@ async function loadLanceRows() {
     if (fs) params.set('source', fs);
     if (fp) params.set('parent_id', fp);
     try {
-        const res  = await fetch('/api/debug/pg/kb_embedding/rows?' + params);
+        const res  = await apiFetch('/api/debug/pg/kb_embedding/rows?' + params);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) { meta.textContent = 'Error: ' + (data.detail || res.status); return; }
         meta.textContent = 'total_after_filter=' + data.total_after_filter + (data.truncated_scan ? ' (scan capped)' : '');
@@ -1030,7 +1264,7 @@ async function loadNeo4jSummary() {
     const el = document.getElementById('neo4jSummaryOut');
     el.textContent = 'Loading…';
     try {
-        const res  = await fetch('/api/debug/graph/summary');
+        const res  = await apiFetch('/api/debug/graph/summary');
         const data = await res.json().catch(() => ({}));
         el.textContent = res.ok ? (data.summary || '(empty)') : 'Error: ' + (data.detail || res.status);
     } catch (e) { el.textContent = String(e); }
@@ -1045,7 +1279,7 @@ async function runNeo4jSearch() {
     const kws = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
     const lim = parseInt(document.getElementById('neo4jLimit').value || '40', 10);
     try {
-        const res  = await fetch('/api/debug/graph/search', {
+        const res  = await apiFetch('/api/debug/graph/search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ keywords: kws, limit: lim }),
@@ -1071,7 +1305,7 @@ let chatTestConversationId = null;
 
 async function resetChatTest() {
     if (chatTestConversationId) {
-        try { await fetch('/api/chat/session/' + encodeURIComponent(chatTestConversationId), { method: 'DELETE' }); } catch (_) {}
+        try { await apiFetch('/api/chat/session/' + encodeURIComponent(chatTestConversationId), { method: 'DELETE' }); } catch (_) {}
     }
     chatTestConversationId = null;
     chatTestMessages = [];
@@ -1109,7 +1343,7 @@ async function sendChatTest() {
     renderChatTestConversation();
     document.getElementById('chatTestQuery').value = '';
     try {
-        const res  = await fetch('/api/chat/session', {
+        const res  = await apiFetch('/api/chat/session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ conversation_id: chatTestConversationId, message: query, memory_mode: 'prioritized' }),
@@ -1139,8 +1373,8 @@ async function runChatTestAB() {
     document.getElementById('chatTestDetails').textContent = 'Running A/B comparison…';
     try {
         const [ra, rb] = await Promise.all([
-            fetch('/api/chat/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: query, memory_mode: 'prioritized' }) }),
-            fetch('/api/chat/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: query, memory_mode: 'compact' }) }),
+            apiFetch('/api/chat/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: query, memory_mode: 'prioritized' }) }),
+            apiFetch('/api/chat/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: query, memory_mode: 'compact' }) }),
         ]);
         const [da, db] = await Promise.all([ra.json(), rb.json()]);
         document.getElementById('chatTestDetails').innerHTML =

@@ -171,6 +171,24 @@ class Settings(BaseSettings):
         description="Optional API key for OpenAI-compatible or Anthropic providers."
     )
 
+    # --- Demo auth (session cookie + env users) ---
+    auth_enabled: bool = Field(
+        default=True,
+        description="Require login for console/portal and API (except /api/auth/login).",
+    )
+    auth_secret_key: str = Field(
+        default="dev-demo-secret-change-me",
+        description="Secret for signing the session cookie (set a strong value in production demos).",
+    )
+    auth_users: str = Field(
+        default='[{"username":"demo","password":"demo123","display_name":"Demo User"}]',
+        description='JSON list of demo users: [{"username","password","display_name"}].',
+    )
+    auth_session_https_only: bool = Field(
+        default=False,
+        description="Set Session cookie Secure flag (enable behind HTTPS).",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

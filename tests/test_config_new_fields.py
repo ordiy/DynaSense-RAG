@@ -62,6 +62,14 @@ def test_default_skip_graph_ingest(clean_settings_cache):
     assert get_settings().skip_graph_ingest is False
 
 
+def test_default_auth_enabled(clean_settings_cache, monkeypatch):
+    monkeypatch.delenv("AUTH_ENABLED", raising=False)
+    from src.core.config import get_settings
+
+    get_settings.cache_clear()
+    assert get_settings().auth_enabled is True
+
+
 def test_skip_graph_ingest_env_override(monkeypatch, clean_settings_cache):
     monkeypatch.setenv("SKIP_GRAPH_INGEST", "true")
     from src.core.config import get_settings

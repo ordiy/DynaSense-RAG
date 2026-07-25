@@ -33,7 +33,8 @@
 │  src/api/main.py  (FastAPI 工厂 + lifespan)                     │
 │  src/api/routers/  (按职责拆分的路由模块，见 §1.2)               │
 │  src/api/schemas.py        (Pydantic 请求/响应 DTO)              │
-│  src/api/state.py          (进程内共享状态：tasks / sessions)     │
+│  src/api/state.py          (进程内：tasks / feedback 缓冲)       │
+│  auth + ConversationStore   (Cookie 登录；会话历史 → PostgreSQL)   │
 │  src/api/error_handlers.py (全局异常→HTTP 状态码映射)            │
 │  src/api/guardrails.py     (可选 PII 查询拦截)                   │
 │  src/api/upload_validation.py (文件名/MIME 纯函数校验)           │
@@ -92,6 +93,8 @@
 | `kg_triple` | 关系型知识图谱三元组（AGE 不可用时的回退） | `subject_norm`, `predicate`, `object_norm`, `chunk_id`, `source` |
 | AGE 图 `map_rag_kg` | Apache AGE 图（Entity 顶点 + REL 边） | 由 `postgres_age_graph.py` 管理 |
 | `feedback` | 用户反馈持久化（👍/👎 + LangSmith 关联） | `id TEXT PK`, `ts TIMESTAMPTZ`, `query TEXT`, `rating SMALLINT(-1/0/1)`, `comment TEXT`, `tags JSONB`, `trace_id TEXT` |
+| `chat_conversation` | 多轮会话元数据（按用户） | `id`, `user_id`, `title`, `created_at`, `updated_at` |
+| `chat_message` | 会话消息 + 可选 meta（route/citations） | `id`, `conversation_id`, `role`, `content`, `meta JSONB` |
 
 ---
 
@@ -455,20 +458,21 @@ def _post_json_with_retries(url, headers, payload) -> dict:
 
 ---
 
-### 3.8 进程内共享状态（In-Process State Store）
+### 3.8 会话持久化与演示登录
 
-**文件**：`src/api/state.py`
+**聊天历史（权威源）**：PostgreSQL 表 `chat_conversation` / `chat_message`，由 `ConversationStore`（`postgres_conversations.py`）写入；无库时回退 `MemoryConversationStore`。详见 [`demo_console_vnext.md`](./demo_console_vnext.md)。
+
+**演示登录**：`AUTH_ENABLED` + `SessionMiddleware` 签名 Cookie；`AuthGateMiddleware` 保护 `/`、`/demo` 与 `/api/*`（白名单：`/api/auth/*`、`/login`、`/static`）。
+
+**仍为进程内**（`src/api/state.py`）：
 
 ```python
 tasks: dict[str, dict[str, Any]] = {}         # 上传任务状态，TTL 清理
-chat_sessions: dict[str, dict[str, Any]] = {} # 会话历史，TTL 清理
+chat_sessions: dict[str, dict[str, Any]] = {} # 遗留缓冲（会话 API 已改走 PG）
 feedback_log: list[dict[str, Any]] = []        # 反馈环形缓冲，MAX=1000
-
-def cleanup_tasks() -> None          # 每次请求前惰性清理过期任务
-def cleanup_chat_sessions() -> None  # 每次请求前惰性清理过期会话
 ```
 
-> ⚠️ 此设计为 **单进程内存存储**，多进程/多实例部署时会话不共享。生产级别需替换为 Redis 或数据库持久化。
+> ⚠️ `tasks` / `feedback_log` 仍为单进程内存；多实例部署需外化。聊天会话历史已持久化到 PostgreSQL。
 
 ---
 

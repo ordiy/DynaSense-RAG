@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in · MAP-RAG</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --navy: #0f2744;
+            --navy-deep: #0a1a2f;
+            --accent: #0d9488;
+            --accent-hover: #0f766e;
+            --surface: #ffffff;
+            --muted: #64748b;
+            --border: #e2e8f0;
+            --danger: #b91c1c;
+            --bg-glow: radial-gradient(1200px 600px at 10% -10%, #1e3a5f 0%, transparent 55%),
+                       radial-gradient(900px 500px at 90% 10%, #134e4a 0%, transparent 50%),
+                       linear-gradient(165deg, #0a1a2f 0%, #0f2744 45%, #102a43 100%);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: 'IBM Plex Sans', system-ui, sans-serif;
+            background: var(--bg-glow);
+            color: #0f172a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+        }
+        .card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--surface);
+            border-radius: 12px;
+            box-shadow: 0 24px 48px rgba(0,0,0,0.28);
+            padding: 2.25rem 2rem 2rem;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1.75rem;
+        }
+        .logo {
+            width: 40px; height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(145deg, #0f2744, #0d9488);
+            color: #fff;
+            font-weight: 700;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.85rem;
+            letter-spacing: -0.02em;
+        }
+        .brand h1 {
+            margin: 0;
+            font-family: 'Source Serif 4', Georgia, serif;
+            font-size: 1.35rem;
+            font-weight: 600;
+            color: var(--navy);
+        }
+        .brand p {
+            margin: 0.15rem 0 0;
+            font-size: 0.8rem;
+            color: var(--muted);
+        }
+        label {
+            display: block;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #334155;
+            margin-bottom: 0.35rem;
+        }
+        input {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.65rem 0.75rem;
+            font-size: 0.95rem;
+            font-family: inherit;
+            margin-bottom: 1rem;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(13,148,136,0.15);
+        }
+        button {
+            width: 100%;
+            border: none;
+            border-radius: 8px;
+            background: var(--accent);
+            color: #fff;
+            font-weight: 600;
+            font-size: 0.95rem;
+            padding: 0.75rem 1rem;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.15s;
+        }
+        button:hover { background: var(--accent-hover); }
+        button:disabled { opacity: 0.65; cursor: not-allowed; }
+        .hint {
+            margin-top: 1.25rem;
+            font-size: 0.78rem;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+        .err {
+            display: none;
+            background: #fef2f2;
+            color: var(--danger);
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 0.6rem 0.75rem;
+            font-size: 0.82rem;
+            margin-bottom: 1rem;
+        }
+        .err.show { display: block; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="brand">
+            <div class="logo">MR</div>
+            <div>
+                <h1>MAP-RAG</h1>
+                <p>Enterprise knowledge console</p>
+            </div>
+        </div>
+        <div class="err" id="errBox"></div>
+        <form id="loginForm">
+            <label for="username">Username</label>
+            <input id="username" name="username" autocomplete="username" required placeholder="Enter username">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="Enter password">
+            <button type="submit" id="btnLogin">Sign in</button>
+        </form>
+        <p class="hint">Use the demo credentials provided for your evaluation session. Access is limited to authorized reviewers.</p>
+    </div>
+    <script>
+    function nextUrl() {
+        const p = new URLSearchParams(location.search).get('next') || '/';
+        if (!p.startsWith('/') || p.startsWith('//')) return '/';
+        return p;
+    }
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById('btnLogin');
+        const err = document.getElementById('errBox');
+        err.classList.remove('show');
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    username: document.getElementById('username').value.trim(),
+                    password: document.getElementById('password').value,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                err.textContent = data.detail || 'Sign-in failed';
+                err.classList.add('show');
+                return;
+            }
+            location.href = nextUrl();
+        } catch (ex) {
+            err.textContent = String(ex);
+            err.classList.add('show');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+    </script>
+</body>
+</html>

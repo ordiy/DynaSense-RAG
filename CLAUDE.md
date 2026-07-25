@@ -54,7 +54,8 @@ Run `make lint` to check all three.
 
 - `fts_parent_documents` imports `get_pool` **inside the function body**, not at module level.
   Patch `src.infrastructure.persistence.postgres_connection.get_pool`, NOT `src.hybrid_rag.get_pool`.
-- Session state (`src/api/state.py`) is in-process memory — breaks under multi-instance deployment.
-  Production needs Redis or a DB-backed session store.
+- Chat conversation history is PostgreSQL-backed (`chat_conversation` / `chat_message`);
+  demo login uses signed session cookies (`AUTH_ENABLED`). Upload `tasks` in `src/api/state.py`
+  remain in-process — multi-instance still needs an external task store for those.
 - xlsx files with special characters in filenames may land with 0 rows in `kb_embedding`.
   Fix: re-upload the file via `POST /api/upload`.

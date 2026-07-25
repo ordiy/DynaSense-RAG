@@ -64,3 +64,32 @@ def no_db_settings(monkeypatch, clean_settings_cache):
 
     get_settings.cache_clear()
     return get_settings()
+
+
+@pytest.fixture()
+def auth_disabled(monkeypatch, clean_settings_cache):
+    """Disable demo auth gate for API tests that predate login."""
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    from src.core.config import get_settings
+    from src.api.auth_users import clear_demo_users_cache
+
+    get_settings.cache_clear()
+    clear_demo_users_cache()
+    return get_settings()
+
+
+@pytest.fixture()
+def demo_auth_enabled(monkeypatch, clean_settings_cache):
+    """Enable auth with a known demo user for login tests."""
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret-key")
+    monkeypatch.setenv(
+        "AUTH_USERS",
+        '[{"username":"demo","password":"demo123","display_name":"Demo User"}]',
+    )
+    from src.core.config import get_settings
+    from src.api.auth_users import clear_demo_users_cache
+
+    get_settings.cache_clear()
+    clear_demo_users_cache()
+    return get_settings()

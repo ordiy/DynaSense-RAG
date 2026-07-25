@@ -23,8 +23,9 @@ Instead, this architecture achieves high precision through:
 2. **High-Dimensional Vector Retrieval** (Google Vertex AI `text-embedding-004` + PostgreSQL pgvector)
 3. **Cross-Encoder Semantic Reranking** (Jina Multilingual Reranker)
 4. **Dual-Track Grader + Generator** (LangGraph state machine — strict for factual queries, analytically capable for reasoning queries)
-5. **Server-Side Multi-Turn Memory** (conversation session with context-length control)
+5. **Server-Side Multi-Turn Memory** (conversation sessions persisted in PostgreSQL, with context-length control)
 6. **Hybrid RAG (MVP)** — **Query Router** + **Dense + BM25** + **PostgreSQL graph recall** + unified **Top‑K rerank** before grading (see `docs/mvp_hybrid_rag.md`)
+7. **Demo Console** — left-nav business UI, demo login (`AUTH_*`), and chat history sidebar (see `docs/demo_console_vnext.md`)
 
 
 
@@ -269,6 +270,7 @@ export INFERENCE_PROVIDER=vertex       # vertex | openai_compat | anthropic
 | [docs/postgresql_storage_roadmap.md](./docs/postgresql_storage_roadmap.md) | **PostgreSQL + pgvector + AGE** — unified storage (LanceDB / Neo4j / MongoMock retired) |
 | [docs/TODO.md](./docs/TODO.md) | **Backlog** — OpenClaw vs RAG boundaries and follow-ups |
 | [docs/testing.md](./docs/testing.md) | **Testing** — pytest layers, `DATABASE_URL`, troubleshooting |
+| [docs/demo_console_vnext.md](./docs/demo_console_vnext.md) | **Demo Console VNext** — left nav, login, PG chat history, test matrix |
 | [docs/graph_constrained_queries.md](./docs/graph_constrained_queries.md) | **Constrained graph queries** — whitelist templates, debug APIs |
 | [docs/whatif_tools.md](./docs/whatif_tools.md) | **What-If tools** — `/api/whatif/loan/compare`, no-RAG DAG |
 | [docs/mvp_hybrid_rag.md](./docs/mvp_hybrid_rag.md) | **Hybrid RAG MVP** — router, dense+FTS, PostgreSQL AGE / `kg_triple`, fusion rerank (`readme-v2-1.md`) |

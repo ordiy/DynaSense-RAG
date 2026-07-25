@@ -1,20 +1,18 @@
-"""Multi-turn session chat and A/B memory comparison."""
+"""Multi-turn session chat and A/B memory comparison (PostgreSQL-backed history)."""
 
 from __future__ import annotations
 
 import base64
 import logging
 import os
-import time
 import uuid
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from src.api import state
-from src.api.schemas import ChatMessage, ChatSessionABRequest, ChatSessionRequest
+from src.api.deps import require_user
 from src.api.guardrails import guard_query_or_raise
+from src.api.schemas import ChatMessage, ChatSessionABRequest, ChatSessionRequest
 from src.api.session_memory import build_query_with_history, trim_session_history
-from src.api.state import cleanup_chat_sessions
 from src.api.upload_validation import (
     is_allowed_text_upload,
     is_docx_upload,
@@ -23,27 +21,75 @@ from src.api.upload_validation import (
 )
 from src.core.config import get_settings
 from src.core.exceptions import QueryGuardrailError
+from src.infrastructure.persistence.postgres_conversations import get_conversation_store
 from src.rag_core import run_chat_pipeline, run_chat_pipeline_multimodal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["session"])
 
 
+def _history_as_messages(store_msgs: list[dict]) -> list[dict]:
+    return [{"role": m["role"], "content": m["content"]} for m in store_msgs]
+
+
+def _persist_trimmed(
+    store,
+    conversation_id: str,
+    user_id: str,
+    messages: list[dict],
+    assistant_meta: dict | None = None,
+) -> list[dict]:
+    """
+    After a turn, ``messages`` already includes the new user+assistant pair in memory.
+    Persist only the last two turns that are not yet in the store when we append
+    incrementally in the handler — callers append via store.append_message.
+    """
+    trimmed = trim_session_history(messages)
+    return trimmed
+
+
+@router.get("/chat/sessions")
+async def list_chat_sessions(
+    limit: int = 50,
+    user: dict = Depends(require_user),
+):
+    store = get_conversation_store()
+    rows = store.list_conversations(user["username"], limit=limit)
+    return {
+        "sessions": [
+            {
+                "conversation_id": r["id"],
+                "title": r["title"],
+                "created_at": r.get("created_at"),
+                "updated_at": r.get("updated_at"),
+            }
+            for r in rows
+        ]
+    }
+
+
 @router.post("/chat/session")
-async def chat_session(request: ChatSessionRequest):
-    cleanup_chat_sessions()
+async def chat_session(
+    request: ChatSessionRequest,
+    user: dict = Depends(require_user),
+):
     s = get_settings()
-    conversation_id = request.conversation_id or str(uuid.uuid4())
-    now = time.time()
+    store = get_conversation_store()
+    user_id = user["username"]
+    conversation_id = store.ensure_conversation(
+        user_id, request.conversation_id, first_user_message=request.message
+    )
 
-    session = state.chat_sessions.get(conversation_id)
-    if session is None:
-        session = {"created_at": now, "updated_at": now, "messages": []}
-        state.chat_sessions[conversation_id] = session
-
-    messages = session["messages"]
+    existing = store.list_messages(conversation_id, user_id) or []
+    messages = _history_as_messages(existing)
     messages.append({"role": "user", "content": request.message})
-    session["updated_at"] = now
+    store.append_message(
+        conversation_id,
+        user_id,
+        "user",
+        request.message,
+        set_title_if_empty=len(existing) == 0,
+    )
 
     request_query = build_query_with_history(
         messages,
@@ -56,9 +102,22 @@ async def chat_session(request: ChatSessionRequest):
         guard_query_or_raise(request.message)
         result = run_chat_pipeline(request_query)
         answer = result.get("answer", "")
+        meta = {
+            "route": result.get("route"),
+            "effective_route": result.get("effective_route"),
+            "citations": result.get("citations", []),
+        }
         messages.append({"role": "assistant", "content": answer})
-        session["messages"] = trim_session_history(messages)
-        session["updated_at"] = time.time()
+        store.append_message(
+            conversation_id, user_id, "assistant", answer, meta=meta
+        )
+        messages = _persist_trimmed(store, conversation_id, user_id, messages)
+        # Reload authoritative history for response
+        stored = store.list_messages(conversation_id, user_id) or []
+        history = [
+            ChatMessage(role=m["role"], content=m["content"]).model_dump()
+            for m in stored
+        ]
         return {
             "conversation_id": conversation_id,
             "memory_mode": request.memory_mode,
@@ -70,7 +129,7 @@ async def chat_session(request: ChatSessionRequest):
             "route": result.get("route"),
             "effective_route": result.get("effective_route"),
             "router_reason": result.get("router_reason"),
-            "history": [ChatMessage(**m).model_dump() for m in session["messages"]],
+            "history": history,
         }
     except QueryGuardrailError:
         raise
@@ -89,6 +148,7 @@ async def chat_session_multimodal(
     conversation_id: str = Form(None),
     memory_mode: str = Form("prioritized"),
     files: list[UploadFile] = File(default=[]),
+    user: dict = Depends(require_user),
 ):
     """
     Multi-turn session chat with optional file/image attachments.
@@ -99,22 +159,15 @@ async def chat_session_multimodal(
     - ``memory_mode`` (optional): "prioritized" (default) or "legacy"
     - ``files`` (optional, repeatable): images (JPEG/PNG/WEBP/GIF) and/or
       documents (PDF / DOCX / XLSX / TXT / MD)
-
-    Images are passed directly to Gemini vision; text documents are extracted
-    and prepended to the query as additional context.
     """
-    cleanup_chat_sessions()
     s = get_settings()
-    conversation_id = conversation_id or str(uuid.uuid4())
-    now = time.time()
+    store = get_conversation_store()
+    user_id = user["username"]
+    conversation_id = store.ensure_conversation(
+        user_id, conversation_id, first_user_message=message
+    )
 
-    session = state.chat_sessions.get(conversation_id)
-    if session is None:
-        session = {"created_at": now, "updated_at": now, "messages": []}
-        state.chat_sessions[conversation_id] = session
-
-    # ── Process attachments ──────────────────────────────────────────────────
-    image_parts: list[tuple[str, str]] = []   # (mime_type, base64_data)
+    image_parts: list[tuple[str, str]] = []
     doc_texts: list[str] = []
 
     max_b = s.max_upload_bytes
@@ -168,12 +221,17 @@ async def chat_session_multimodal(
                 detail=f"Unsupported file type: '{fname}'. Allowed: images, PDF, DOCX, XLSX, TXT, MD.",
             )
 
-    # ── Build augmented message for session history ──────────────────────────
-    session_messages = session["messages"]
+    existing = store.list_messages(conversation_id, user_id) or []
+    session_messages = _history_as_messages(existing)
     session_messages.append({"role": "user", "content": message})
-    session["updated_at"] = now
+    store.append_message(
+        conversation_id,
+        user_id,
+        "user",
+        message,
+        set_title_if_empty=len(existing) == 0,
+    )
 
-    # Prepend extracted document text to the query for RAG context
     augmented_message = message
     if doc_texts:
         augmented_message = "\n\n".join(doc_texts) + f"\n\n[User question]: {message}"
@@ -184,7 +242,6 @@ async def chat_session_multimodal(
         mode=memory_mode,
     )[: s.max_query_len]
 
-    # Swap the last user turn's content for the augmented version when building query
     if doc_texts:
         probe = session_messages[:-1] + [{"role": "user", "content": augmented_message}]
         request_query = build_query_with_history(
@@ -200,9 +257,19 @@ async def chat_session_multimodal(
             result = run_chat_pipeline(request_query)
 
         answer = result.get("answer", "")
+        meta = {
+            "route": result.get("route"),
+            "citations": result.get("citations", []),
+        }
         session_messages.append({"role": "assistant", "content": answer})
-        session["messages"] = trim_session_history(session_messages)
-        session["updated_at"] = time.time()
+        store.append_message(
+            conversation_id, user_id, "assistant", answer, meta=meta
+        )
+        stored = store.list_messages(conversation_id, user_id) or []
+        history = [
+            ChatMessage(role=m["role"], content=m["content"]).model_dump()
+            for m in stored
+        ]
 
         return {
             "conversation_id": conversation_id,
@@ -214,7 +281,7 @@ async def chat_session_multimodal(
             "route": result.get("route"),
             "has_images": bool(image_parts),
             "has_documents": bool(doc_texts),
-            "history": [ChatMessage(**m).model_dump() for m in session["messages"]],
+            "history": history,
         }
     except QueryGuardrailError:
         raise
@@ -226,12 +293,16 @@ async def chat_session_multimodal(
 
 
 @router.post("/chat/session/ab")
-async def chat_session_ab(request: ChatSessionABRequest):
-    cleanup_chat_sessions()
+async def chat_session_ab(
+    request: ChatSessionABRequest,
+    user: dict = Depends(require_user),
+):
     s = get_settings()
+    store = get_conversation_store()
+    user_id = user["username"]
     conversation_id = request.conversation_id or str(uuid.uuid4())
-    sess = state.chat_sessions.get(conversation_id)
-    base_messages = list(sess["messages"]) if sess else []
+    existing = store.list_messages(conversation_id, user_id)
+    base_messages = _history_as_messages(existing) if existing else []
     probe_messages = base_messages + [{"role": "user", "content": request.message}]
 
     mode_queries = {
@@ -288,22 +359,32 @@ async def chat_session_ab(request: ChatSessionABRequest):
 
 
 @router.get("/chat/session/{conversation_id}")
-async def get_chat_session(conversation_id: str):
-    cleanup_chat_sessions()
-    session = state.chat_sessions.get(conversation_id)
-    if not session:
+async def get_chat_session(
+    conversation_id: str,
+    user: dict = Depends(require_user),
+):
+    store = get_conversation_store()
+    conv = store.get_conversation(conversation_id, user["username"])
+    if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    stored = store.list_messages(conversation_id, user["username"]) or []
     return {
         "conversation_id": conversation_id,
-        "history": [ChatMessage(**m).model_dump() for m in session["messages"]],
-        "updated_at": session.get("updated_at"),
+        "title": conv.get("title"),
+        "history": [
+            ChatMessage(role=m["role"], content=m["content"]).model_dump()
+            for m in stored
+        ],
+        "updated_at": conv.get("updated_at"),
     }
 
 
 @router.delete("/chat/session/{conversation_id}")
-async def delete_chat_session(conversation_id: str):
-    cleanup_chat_sessions()
-    if conversation_id in state.chat_sessions:
-        state.chat_sessions.pop(conversation_id, None)
+async def delete_chat_session(
+    conversation_id: str,
+    user: dict = Depends(require_user),
+):
+    store = get_conversation_store()
+    if store.delete_conversation(conversation_id, user["username"]):
         return {"conversation_id": conversation_id, "deleted": True}
     raise HTTPException(status_code=404, detail="Conversation not found")
